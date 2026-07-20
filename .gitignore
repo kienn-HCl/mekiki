@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+result
+env
+user_memory.txt
+feeds/*.opml
+!feeds/example.opml
+*.test
+*.test.lock

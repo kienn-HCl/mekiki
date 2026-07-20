@@ -1,0 +1,20 @@
+name = "news"
+opml_path = "feeds/news.opml"
+webhook_env = "NEWS_DISCORD_WEBHOOK_URL"
+
+hours_back = 24
+pick_count = 20
+embed_color = 0x3498DB
+header_title = "ニュース注目記事ピックアップ"
+
+cache_path = ".cache/news.json"
+
+[prompts]
+select_criteria = """
+- 国際情勢、国内政治、経済、社会、科学など幅広いジャンルからバランスよく選んでください
+- 世界的・社会的インパクトが大きいニュースを優先してください
+- 情報源の信頼性を重視してください：Reuters・AP・BBC・共同通信・時事通信・主要全国紙・
+  Financial Times・Bloomberg などの一次情報・大手通信社系を優先し、
+  ゴシップやオピニオン記事は避けてください
+- 同じ事件・話題の重複記事は、最も信頼できるソースのものを1つだけ選んでください
+"""

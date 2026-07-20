@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- フィード一覧の形式サンプル（SPEC §4）。
+     実データ（feeds/rss.opml 等）は個人の購読リストのためgit管理外。
+     このファイルをコピーして自分のOPMLを作り、プロファイルの opml_path で指す。 -->
+<opml version="2.0">
+  <head>
+    <title>mekiki feeds example</title>
+  </head>
+  <body>
+    <outline text="Linux・OS">
+      <outline text="LWN.net" type="rss" xmlUrl="https://lwn.net/headlines/rss" htmlUrl="https://lwn.net/" />
+    </outline>
+    <outline text="技術ニュース">
+      <outline text="Hacker News" type="rss" xmlUrl="https://news.ycombinator.com/rss" htmlUrl="https://news.ycombinator.com/" />
+    </outline>
+  </body>
+</opml>
