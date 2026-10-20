@@ -40,13 +40,14 @@ nix build .#with-claude   # claude -p 経路を使う場合。PATHにclaude-code
 MEKIKI_PASSWORD=好きなパスワード ./mekiki serve -addr :8080 -data ./data
 ```
 
-`http://サーバ:8080/` を開き、ユーザー名は任意・パスワードは `MEKIKI_PASSWORD` でログインする。
+`http://サーバ:8080/` を開き、ユーザー名 `mekiki`（`MEKIKI_USER` で変更可）・パスワード `MEKIKI_PASSWORD` でログインする。
 
 | 環境変数 / フラグ | 内容 |
 |---|---|
 | `-addr` / `MEKIKI_ADDR` | 待ち受けアドレス（既定 `:8080`） |
 | `-data` / `MEKIKI_DATA` | データディレクトリ（既定 `./data`）。`mekiki.db` が作られる |
 | `MEKIKI_PASSWORD` | 設定するとBasic認証をかける。**外部に公開するなら必ず設定する** |
+| `MEKIKI_USER` | Basic認証のユーザー名（既定 `mekiki`） |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_COMPAT_API_KEY` | 画面でAPIキーを入れない場合に使うキー |
 
 Basic認証は通信を暗号化しないので、インターネット越しに使う場合はHTTPS化したリバースプロキシ

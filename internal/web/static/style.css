@@ -49,8 +49,9 @@ code { background: var(--border); padding: 0 .3em; border-radius: 4px; }
   position: sticky; top: 0; z-index: 10;
 }
 .toprow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-bottom: 6px; }
-.brand { font-weight: 700; font-size: 1.1rem; color: var(--text); }
-.brand small { color: var(--muted); font-weight: 400; }
+.brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1.1rem; color: var(--text); }
+.brand:hover { text-decoration: none; }
+.brand img { display: block; border-radius: 5px; }
 .topbar nav { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .topbar nav a { color: var(--muted); padding: 2px 0; }
 .topbar nav.profiles { flex: 1; gap: 4px 6px; }
@@ -88,6 +89,9 @@ input, textarea, select {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 8px; width: 100%; max-width: 100%;
 }
+/* テキスト入力・数値入力・セレクトの高さを揃える */
+input:not([type=checkbox]):not([type=radio]):not([type=file]), select { height: 38px; }
+label > input, label > select, label > textarea { margin-top: 4px; }
 input[type=checkbox], input[type=radio] { width: auto; }
 label { display: block; margin: 8px 0; }
 label.check, label.radio { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -171,5 +175,8 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .danger-zone { margin: 24px 0; border: 1px solid var(--danger); border-radius: 10px; padding: 8px 16px; }
 .danger-zone summary { color: var(--danger); cursor: pointer; }
 .panel { margin: 16px 0; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
+/* 同じ行のラベルの文字数が違っても入力欄の位置が揃うよう、入力欄をセルの下端に寄せる */
+.grid > label { display: flex; flex-direction: column; }
+.grid > label > input, .grid > label > select { margin-top: auto; }
 .foot { text-align: center; color: var(--muted); font-size: .8em; padding: 24px 16px; }

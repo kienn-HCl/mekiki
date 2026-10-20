@@ -37,13 +37,14 @@ var assets embed.FS
 
 type Server struct {
 	App      *app.App
+	User     string // Basic認証のユーザー名
 	Password string // 空ならBasic認証なし
 	tmpl     map[string]*template.Template
 	loc      atomic.Pointer[time.Location] // 時刻表示に使う設定のタイムゾーン
 }
 
-func New(a *app.App, password string) (*Server, error) {
-	s := &Server{App: a, Password: password, tmpl: map[string]*template.Template{}}
+func New(a *app.App, user, password string) (*Server, error) {
+	s := &Server{App: a, User: user, Password: password, tmpl: map[string]*template.Template{}}
 	s.loc.Store(config.Defaults().Location())
 	funcs := template.FuncMap{
 		"fmtTime":  s.fmtTime,
@@ -155,8 +156,11 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, pass, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.Password)) != 1 {
+		user, pass, ok := r.BasicAuth()
+		// 両方を必ず比較して、どちらが違ったかを応答時間から推測させない
+		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.User)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.Password)) == 1
+		if !ok || !userOK || !passOK {
 			w.Header().Set("WWW-Authenticate", `Basic realm="mekiki", charset="UTF-8"`)
 			http.Error(w, "認証が必要です", http.StatusUnauthorized)
 			return

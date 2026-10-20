@@ -10,7 +10,7 @@
 <body>
 <header class="topbar">
   <div class="toprow">
-    <a class="brand" href="/">目利き <small>mekiki</small></a>
+    <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="22" height="22">mekiki</a>
     <nav class="profiles" aria-label="プロファイル">
       {{range .Profiles}}<a href="/p/{{.Slug}}/" class="{{if eq .ID $.Profile.ID}}active{{end}}">{{.Name}}</a>{{end}}
       <a href="/profiles" class="manage{{if eq .Nav "profiles"}} active{{end}}" title="プロファイルの管理">＋</a>
@@ -36,7 +36,7 @@
 {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
 {{template "content" .}}
 </main>
-<footer class="foot">mekiki — RSSをAIが目利きして要約する</footer>
+<footer class="foot">mekiki</footer>
 <script src="/static/app.js"></script>
 </body>
 </html>

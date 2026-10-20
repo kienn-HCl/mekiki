@@ -1,5 +1,5 @@
 {
-  description = "mekiki - RSSをClaudeが目利きして要約する「今日のページ」Webアプリ";
+  description = "mekiki - RSSの注目記事をAIが選んで要約する「今日のページ」Webアプリ";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

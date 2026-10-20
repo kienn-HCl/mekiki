@@ -1,5 +1,5 @@
 [Unit]
-Description=mekiki - RSSをClaudeが目利きして要約するWebアプリ
+Description=mekiki - RSSの注目記事をAIが選んで要約するWebアプリ
 After=network-online.target
 Wants=network-online.target
 

@@ -24,7 +24,7 @@ func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
 	if err := st.EnsureProfile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := New(app.New(st), password)
+	srv, err := New(app.New(st), "me", password)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +102,18 @@ func TestBasicAuth(t *testing.T) {
 	ts, _ := newServer(t, "secret")
 	if code, _ := get(t, ts, "/"); code != http.StatusUnauthorized {
 		t.Errorf("認証なし = %d", code)
+	}
+	for _, c := range []struct{ user, pass string }{{"me", "wrong"}, {"other", "secret"}} {
+		req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+		req.SetBasicAuth(c.user, c.pass)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s/%s で通った: %d", c.user, c.pass, resp.StatusCode)
+		}
 	}
 	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
 	req.SetBasicAuth("me", "secret")

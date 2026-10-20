@@ -45,20 +45,22 @@
 <fieldset>
   <legend>全体</legend>
   <div class="grid">
-    <label>タイムゾーン（「今日」の日付と要約実行時刻の基準）<input name="timezone" value="{{.S.Timezone}}"></label>
-    <label>フィード取得間隔（分。0で定期取得しない）<input name="fetch_interval" type="number" min="0" value="{{.S.FetchInterval}}"></label>
+    <label>タイムゾーン<input name="timezone" value="{{.S.Timezone}}"></label>
+    <label>フィード取得間隔（分）<input name="fetch_interval" type="number" min="0" value="{{.S.FetchInterval}}"></label>
   </div>
+  <p class="muted small">タイムゾーンは「今日」の日付と要約実行時刻の基準です。取得間隔を0にすると定期取得しません。</p>
 </fieldset>
 
 <fieldset>
   <legend>フィード取得</legend>
   <div class="grid">
-    <label>1フィードから取得する最大記事数 <input name="articles_per_feed" type="number" min="1" value="{{.S.ArticlesPerFeed}}"></label>
-    <label>スキップまでの連続失敗回数 <input name="max_failures" type="number" min="1" value="{{.S.MaxFailures}}"></label>
-    <label>スキップ中フィードの再試行間隔（時間）<input name="failure_retry_hours" type="number" min="1" value="{{.S.FailureRetryHours}}"></label>
-    <label>RSS記事の保持日数 <input name="retention_days" type="number" min="1" value="{{.S.RetentionDays}}"></label>
+    <label>1フィードの取得件数<input name="articles_per_feed" type="number" min="1" value="{{.S.ArticlesPerFeed}}"></label>
+    <label>スキップまでの失敗回数<input name="max_failures" type="number" min="1" value="{{.S.MaxFailures}}"></label>
+    <label>スキップ後の再試行（時間）<input name="failure_retry_hours" type="number" min="1" value="{{.S.FailureRetryHours}}"></label>
+    <label>記事の保持日数<input name="retention_days" type="number" min="1" value="{{.S.RetentionDays}}"></label>
   </div>
-  <p class="muted small">保持日数を過ぎた記事はRSS画面から消えますが、日付ページに載った記事はずっと残ります。</p>
+  <p class="muted small">連続して失敗したフィードは取得をスキップし、再試行の間隔ごとに自動で試し直します。
+  保持日数を過ぎた記事はRSS画面から消えますが、日付ページに載った記事はずっと残ります。</p>
 </fieldset>
 
 <div class="actions">

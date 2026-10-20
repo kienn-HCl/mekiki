@@ -24,7 +24,7 @@ import (
 
 var version = "dev"
 
-const usage = `mekiki — RSSをAIが目利きして要約するWebアプリ
+const usage = `mekiki — RSSの注目記事をAIが選んで要約するWebアプリ
 
 使い方:
   mekiki serve [-addr :8080] [-data ./data]   Webサーバとスケジューラを起動
@@ -38,7 +38,8 @@ const usage = `mekiki — RSSをAIが目利きして要約するWebアプリ
 環境変数:
   MEKIKI_ADDR       待ち受けアドレス（-addr の既定値。既定 :8080）
   MEKIKI_DATA       データディレクトリ（-data の既定値。既定 ./data）
-  MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける（ユーザー名は任意）
+  MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける
+  MEKIKI_USER       Basic認証のユーザー名（既定 mekiki）
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
                     画面でAPIキーを設定していない場合に使うキー
 `
@@ -127,7 +128,7 @@ func serve(args []string) error {
 	}
 
 	a := app.New(st)
-	srv, err := web.New(a, os.Getenv("MEKIKI_PASSWORD"))
+	srv, err := web.New(a, env("MEKIKI_USER", "mekiki"), os.Getenv("MEKIKI_PASSWORD"))
 	if err != nil {
 		return err
 	}

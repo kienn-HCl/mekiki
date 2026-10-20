@@ -17,9 +17,10 @@
 <form class="panel" method="post" action="/profiles">
   <h2>プロファイルを追加</h2>
   <div class="grid">
-    <label>表示名 <input name="name" required placeholder="ニュース"></label>
-    <label>ID（URLに使う。英小文字・数字・-・_）<input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{0,31}" placeholder="news"></label>
+    <label>表示名<input name="name" required placeholder="ニュース"></label>
+    <label>ID<input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{0,31}" placeholder="news"></label>
   </div>
+  <p class="muted small">IDはURL（/p/ID/）に使います。英小文字・数字・-・_ の32字以内。</p>
   <label>選定基準などの初期値
     <select name="copy_from">
       <option value="">既定の値</option>

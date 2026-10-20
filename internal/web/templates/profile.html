@@ -5,9 +5,10 @@
 <fieldset>
   <legend>プロファイル</legend>
   <div class="grid">
-    <label>表示名 <input name="name" value="{{.P.Name}}" required></label>
-    <label>ID（URLに使う。英小文字・数字・-・_）<input name="slug" value="{{.P.Slug}}" required pattern="[a-z0-9][a-z0-9_\-]{0,31}"></label>
+    <label>表示名<input name="name" value="{{.P.Name}}" required></label>
+    <label>ID<input name="slug" value="{{.P.Slug}}" required pattern="[a-z0-9][a-z0-9_\-]{0,31}"></label>
   </div>
+  <p class="muted small">IDはURL（/p/ID/）に使います。英小文字・数字・-・_ の32字以内。</p>
 </fieldset>
 
 <fieldset>
@@ -17,9 +18,10 @@
   <label>選定基準
     <textarea name="select_criteria" rows="6" required>{{.P.SelectCriteria}}</textarea></label>
   <div class="grid">
-    <label>1回の実行で追加する最大記事数 <input name="pick_count" type="number" min="1" max="100" value="{{.P.PickCount}}"></label>
-    <label>何時間前までの記事を候補にするか <input name="hours_back" type="number" min="1" value="{{.P.HoursBack}}"></label>
+    <label>1回の最大追加件数<input name="pick_count" type="number" min="1" max="100" value="{{.P.PickCount}}"></label>
+    <label>候補にする期間（時間）<input name="hours_back" type="number" min="1" value="{{.P.HoursBack}}"></label>
   </div>
+  <p class="muted small">注目に値する記事が少なければ、最大件数より少なく選ばれます。候補にする期間より古い記事は選ばれません。</p>
   <label class="check"><input type="checkbox" name="overview" value="1" {{if .P.Overview}}checked{{end}}>「今日のまとめ」を生成する（実行ごとに1回AIを呼びます）</label>
 </fieldset>
 
@@ -38,11 +40,12 @@
     <input name="discord_webhook" type="password" autocomplete="off" placeholder="https://discord.com/api/webhooks/..."></label>
   {{if .P.DiscordWebhook}}<label class="check"><input type="checkbox" name="discord_clear" value="1">Webhookを削除して投稿をやめる</label>{{end}}
   <div class="grid">
-    <label>ヘッダーの見出し <input name="discord_title" value="{{.P.DiscordTitle}}"></label>
+    <label>見出し<input name="discord_title" value="{{.P.DiscordTitle}}"></label>
     <label>embedの色（16進）<input name="discord_color" value="{{printf "%06X" .P.DiscordColor}}"></label>
-    <label>1メッセージあたりのembed数（1〜10）<input name="discord_embeds" type="number" min="1" max="10" value="{{.P.DiscordEmbeds}}"></label>
-    <label>Web画面のURL（投稿にページへのリンクを付ける）<input name="discord_base_url" value="{{.P.DiscordBaseURL}}" placeholder="http://server:8080"></label>
+    <label>1メッセージのembed数<input name="discord_embeds" type="number" min="1" max="10" value="{{.P.DiscordEmbeds}}"></label>
+    <label>Web画面のURL<input name="discord_base_url" value="{{.P.DiscordBaseURL}}" placeholder="http://server:8080"></label>
   </div>
+  <p class="muted small">embed数は1〜10（Discord側のエラーが続く場合は1にすると1件ずつ送ります）。Web画面のURLを入れると、投稿にその日のページへのリンクが付きます。</p>
   <label class="check"><input type="checkbox" name="discord_after_fail" value="1" {{if .P.DiscordAfterFail}}checked{{end}}>要約実行に失敗したらDiscordに⚠️通知する</label>
 </fieldset>
 
