@@ -1,3 +1,13 @@
+// 伏せ字の入力欄の「表示」ボタン
+document.querySelectorAll("button.reveal").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var input = document.getElementById(btn.dataset.target);
+    var show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.textContent = show ? "隠す" : "表示";
+  });
+});
+
 // 取得・要約実行中は状態をポーリングし、終わったら再読み込みする
 (function () {
   var busy = document.getElementById("busy");

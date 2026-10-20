@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -257,5 +259,62 @@ func TestProfilesFlow(t *testing.T) {
 	}
 	if code, _ := get(t, ts, "/p/nothing/"); code != http.StatusOK { // /profiles にリダイレクトされる
 		t.Errorf("存在しないプロファイル: %d", code)
+	}
+}
+
+func TestDiscordWebhookFormAndTest(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	var bodies []string
+	hook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+	// テスト用のTLSサーバの証明書を既定のHTTPクライアントで信頼する
+	old := http.DefaultTransport
+	http.DefaultTransport = hook.Client().Transport
+	defer func() { http.DefaultTransport = old }()
+
+	form := url.Values{
+		"name": {"メイン"}, "slug": {"main"}, "select_criteria": {"- 基準"}, "pick_count": {"5"},
+		"hours_back": {"24"}, "digest_times": {"07:00"}, "discord_embeds": {"5"},
+		"discord_title": {"テスト見出し"}, "discord_color": {"112233"}, "discord_webhook": {hook.URL + "/api/webhooks/1/x"},
+	}
+	loc := post(t, ts, "/p/main/discord/test", form)
+	if !strings.Contains(loc, "msg=") {
+		t.Fatalf("テスト投稿に失敗: %s", loc)
+	}
+	mu.Lock()
+	if len(bodies) != 2 || !strings.Contains(bodies[0], "テスト見出し") || !strings.Contains(bodies[1], `"color":1122867`) {
+		t.Errorf("送信内容: %v", bodies)
+	}
+	mu.Unlock()
+	if p, _ := st.ProfileBySlug(ctx, "main"); p.DiscordWebhook != "" {
+		t.Error("テスト投稿で設定が保存された")
+	}
+
+	// 保存すると入力欄に表示され、空欄で保存すると削除される
+	post(t, ts, "/p/main/settings", form)
+	p, _ := st.ProfileBySlug(ctx, "main")
+	if p.DiscordWebhook != hook.URL+"/api/webhooks/1/x" {
+		t.Fatalf("Webhookが保存されない: %q", p.DiscordWebhook)
+	}
+	_, body := get(t, ts, "/p/main/settings")
+	if !strings.Contains(body, `value="`+hook.URL+`/api/webhooks/1/x"`) {
+		t.Error("保存済みのWebhookが入力欄に出ていない")
+	}
+	form.Set("discord_webhook", "")
+	post(t, ts, "/p/main/settings", form)
+	if p, _ := st.ProfileBySlug(ctx, "main"); p.DiscordWebhook != "" {
+		t.Error("空欄で保存してもWebhookが消えない")
+	}
+	if loc := post(t, ts, "/p/main/discord/test", form); !strings.Contains(loc, "err=") {
+		t.Errorf("URLなしのテスト投稿が通った: %s", loc)
 	}
 }

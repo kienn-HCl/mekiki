@@ -28,6 +28,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/app"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
+	"github.com/kienn-HCl/mekiki/internal/discord"
 	"github.com/kienn-HCl/mekiki/internal/extract"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
 	"github.com/kienn-HCl/mekiki/internal/store"
@@ -105,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	p("GET /runs", s.runs)
 	p("GET /settings", s.profilePage)
 	p("POST /settings", s.actionSaveProfile)
+	p("POST /discord/test", s.actionTestDiscord)
 	p("POST /delete", s.actionDeleteProfile)
 	p("POST /actions/digest", s.actionDigest)
 	p("POST /actions/rebuild", s.actionRebuild)
@@ -799,12 +801,8 @@ func (s *Server) actionSaveProfile(w http.ResponseWriter, r *http.Request, p con
 	}
 	next.DiscordBaseURL = strings.TrimSpace(r.FormValue("discord_base_url"))
 	next.DiscordAfterFail = r.FormValue("discord_after_fail") == "1"
-	if v := strings.TrimSpace(r.FormValue("discord_webhook")); v != "" {
-		next.DiscordWebhook = v
-	}
-	if r.FormValue("discord_clear") == "1" {
-		next.DiscordWebhook = ""
-	}
+	// 保存済みのURLを入力欄に出しているので、空欄で保存したら削除
+	next.DiscordWebhook = strings.TrimSpace(r.FormValue("discord_webhook"))
 	if err := next.Validate(); err != nil {
 		back(w, r, fallback, "err", err.Error())
 		return
@@ -814,6 +812,45 @@ func (s *Server) actionSaveProfile(w http.ResponseWriter, r *http.Request, p con
 		return
 	}
 	http.Redirect(w, r, prefix(next)+"/settings?msg="+url.QueryEscape("プロファイル設定を保存しました"), http.StatusSeeOther)
+}
+
+// actionTestDiscord はプロファイル設定画面に入力中のWebhook（保存前でもよい）にテスト投稿する。
+func (s *Server) actionTestDiscord(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/settings"
+	webhook := strings.TrimSpace(r.FormValue("discord_webhook"))
+	if webhook == "" {
+		back(w, r, fallback, "err", "Webhook URLを入力してください")
+		return
+	}
+	if !strings.HasPrefix(webhook, "https://") {
+		back(w, r, fallback, "err", "Webhook URLは https:// で始まるURLを指定してください")
+		return
+	}
+	title := strings.TrimSpace(r.FormValue("discord_title"))
+	if title == "" {
+		title = p.DiscordTitle
+	}
+	color := p.DiscordColor
+	if c := strings.TrimPrefix(strings.TrimSpace(r.FormValue("discord_color")), "#"); c != "" {
+		if v, err := strconv.ParseInt(c, 16, 32); err == nil {
+			color = int(v)
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	c := discord.New(webhook)
+	header := fmt.Sprintf("## %s\n-# mekiki のテスト投稿です（プロファイル「%s」）", title, p.Name)
+	if err := c.SendContent(ctx, header); err != nil {
+		back(w, r, fallback, "err", "テスト投稿に失敗しました: "+err.Error())
+		return
+	}
+	embed := discord.NewEmbed("テスト記事: mekikiからの疎通確認", "https://example.com/",
+		"この形式で、要約実行で選ばれた記事がタイトル・要約・画像付きで投稿されます。", "テスト / mekiki", "", color)
+	if posted := c.PostEmbeds(ctx, []discord.Embed{embed}, 1); len(posted) != 1 {
+		back(w, r, fallback, "err", "見出しは送れましたが、記事embedの投稿に失敗しました（ログを確認してください）")
+		return
+	}
+	back(w, r, fallback, "msg", "Discordにテスト投稿しました。チャンネルを確認してください（設定はまだ保存されていません）")
 }
 
 func (s *Server) actionDeleteProfile(w http.ResponseWriter, r *http.Request, p config.Profile) {

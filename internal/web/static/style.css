@@ -197,6 +197,9 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .danger-zone { margin: 24px 0; border: 1px solid var(--danger); border-radius: 10px; padding: 8px 16px; }
 .danger-zone summary { color: var(--danger); cursor: pointer; }
 .panel { margin: 16px 0; }
+.secret { display: flex; gap: 6px; margin-top: 4px; }
+.secret input { margin-top: 0; flex: 1; min-width: 0; }
+.secret button { flex: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
 /* 同じ行のラベルの文字数が違っても入力欄の位置が揃うよう、入力欄をセルの下端に寄せる */
 .grid > label { display: flex; flex-direction: column; }
