@@ -1,17 +1,28 @@
 {{define "content"}}
 <h1>プロファイル</h1>
-<p class="muted">用途ごと（技術記事・ニュースなど）にプロファイルを分けると、フィード・選定基準・興味・実行時刻・ページ・Discord投稿先をそれぞれ別に持てます。</p>
+<p class="muted">用途ごと（技術記事・ニュースなど）にプロファイルを分けると、フィード・選定基準・興味・実行時刻・ページ・Discord投稿先をそれぞれ別に持てます。
+上から順に画面上部の切り替えに並び、先頭のプロファイルがトップページ（/）を開いたときに表示されます。</p>
 
 <div class="cards">
-{{range .Rows}}
-  <article class="card">
+{{$last := len .Rows}}
+{{range $i, $r := .Rows}}{{with $r}}
+  <article class="card profile-row">
+    <div class="order">
+      <form method="post" action="/profiles/{{.Slug}}/move"><input type="hidden" name="to" value="up">
+        <button class="small" {{if eq $i 0}}disabled{{end}} title="上へ" aria-label="「{{.Name}}」を上へ">↑</button></form>
+      <form method="post" action="/profiles/{{.Slug}}/move"><input type="hidden" name="to" value="down">
+        <button class="small" {{if eq (inc $i) $last}}disabled{{end}} title="下へ" aria-label="「{{.Name}}」を下へ">↓</button></form>
+    </div>
     <div class="body">
-      <h4><a href="/p/{{.Slug}}/">{{.Name}}</a> <span class="muted small">/p/{{.Slug}}</span></h4>
+      <h4><a href="/p/{{.Slug}}/">{{.Name}}</a> <span class="muted small">/p/{{.Slug}}</span>
+        {{if eq $i 0}}<span class="tag">既定</span>{{end}}</h4>
       <div class="meta">フィード{{.Feeds}}件 · ページ{{.Pages}}日分 · 要約実行 {{range $i, $t := .DigestTimes}}{{if $i}}, {{end}}{{$t}}{{else}}手動のみ{{end}}{{if .DiscordWebhook}} · Discord投稿あり{{end}}</div>
-      <p class="actions"><a class="button" href="/p/{{.Slug}}/settings">設定</a> <a class="button" href="/p/{{.Slug}}/feeds">フィード</a></p>
+      <div class="actions"><a class="button" href="/p/{{.Slug}}/settings">設定</a> <a class="button" href="/p/{{.Slug}}/feeds">フィード</a>
+        {{if ne $i 0}}<form method="post" action="/profiles/{{.Slug}}/move"><input type="hidden" name="to" value="top">
+          <button>先頭にする（既定にする）</button></form>{{end}}</div>
     </div>
   </article>
-{{end}}
+{{end}}{{end}}
 </div>
 
 <form class="panel" method="post" action="/profiles">

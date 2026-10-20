@@ -56,6 +56,7 @@ func New(a *app.App, user, password string) (*Server, error) {
 		"overview": renderOverview,
 		"usage":    ai.ParseUsageLine,
 		"list":     func(v ...string) []string { return v },
+		"inc":      func(i int) int { return i + 1 },
 		"stageLabel": func(s string) string {
 			return map[string]string{
 				"feed": "フィード本文", "page": "ページ本文", "fallback": "WebFetch/タイトル", "failed": "失敗",
@@ -91,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /settings/test", s.actionTestAI)
 	mux.HandleFunc("GET /profiles", s.profilesPage)
 	mux.HandleFunc("POST /profiles", s.actionCreateProfile)
+	mux.HandleFunc("POST /profiles/{slug}/move", s.actionMoveProfile)
 	mux.HandleFunc("POST /actions/fetch", s.actionFetch)
 
 	p := func(pattern string, h profileHandler) {
@@ -759,6 +761,39 @@ func (s *Server) actionCreateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, prefix(p)+"/settings?msg="+url.QueryEscape(
 		"プロファイル「"+p.Name+"」を作成しました。選定基準などを設定し、フィードを追加してください"), http.StatusSeeOther)
+}
+
+// actionMoveProfile はプロファイルの並びを変える（to = up / down / top）。
+func (s *Server) actionMoveProfile(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	list, err := s.App.Store.Profiles(ctx)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	i := slices.IndexFunc(list, func(p config.Profile) bool { return p.Slug == r.PathValue("slug") })
+	if i < 0 {
+		back(w, r, "/profiles", "err", "プロファイルが見つかりません")
+		return
+	}
+	to := i
+	switch r.FormValue("to") {
+	case "up":
+		to = i - 1
+	case "down":
+		to = i + 1
+	case "top":
+		to = 0
+	}
+	if err := s.App.Store.MoveProfile(ctx, list[i].ID, to); err != nil {
+		serverError(w, err)
+		return
+	}
+	msg := ""
+	if to <= 0 {
+		msg = "「" + list[i].Name + "」を先頭にしました。トップページを開くとこのプロファイルが表示されます"
+	}
+	back(w, r, "/profiles", "msg", msg)
 }
 
 func (s *Server) profilePage(w http.ResponseWriter, r *http.Request, p config.Profile) {

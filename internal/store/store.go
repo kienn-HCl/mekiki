@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -460,6 +461,34 @@ func (s *Store) UpdateProfile(ctx context.Context, p config.Profile) error {
 		return fmt.Errorf("プロファイルID %q は使われています", p.Slug)
 	}
 	return err
+}
+
+// MoveProfile はプロファイルの並び順を変える。to は移動先の位置（0始まり。範囲外は端に丸める）。
+// 先頭のプロファイルが、トップページを開いたときに表示される既定のプロファイルになる。
+func (s *Store) MoveProfile(ctx context.Context, id int64, to int) error {
+	list, err := s.Profiles(ctx)
+	if err != nil {
+		return err
+	}
+	from := slices.IndexFunc(list, func(p config.Profile) bool { return p.ID == id })
+	if from < 0 {
+		return ErrNotFound
+	}
+	to = max(0, min(to, len(list)-1))
+	p := list[from]
+	list = slices.Delete(list, from, from+1)
+	list = slices.Insert(list, to, p)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, p := range list {
+		if _, err := tx.ExecContext(ctx, `UPDATE profiles SET position = ? WHERE id = ?`, i+1, p.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // DeleteProfile はプロファイルとそのフィード・記事・ページ・履歴をすべて消す。

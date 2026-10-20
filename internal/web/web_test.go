@@ -318,3 +318,48 @@ func TestDiscordWebhookFormAndTest(t *testing.T) {
 		t.Errorf("URLなしのテスト投稿が通った: %s", loc)
 	}
 }
+
+func TestReorderProfilesAndDefault(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	for _, slug := range []string{"tech", "news"} {
+		post(t, ts, "/profiles", url.Values{"name": {slug}, "slug": {slug}})
+	}
+	order := func() string {
+		list, _ := st.Profiles(ctx)
+		var s []string
+		for _, p := range list {
+			s = append(s, p.Slug)
+		}
+		return strings.Join(s, ",")
+	}
+	if got := order(); got != "main,tech,news" {
+		t.Fatalf("初期順: %s", got)
+	}
+	post(t, ts, "/profiles/news/move", url.Values{"to": {"up"}})
+	if got := order(); got != "main,news,tech" {
+		t.Errorf("上へ: %s", got)
+	}
+	post(t, ts, "/profiles/tech/move", url.Values{"to": {"top"}})
+	if got := order(); got != "tech,main,news" {
+		t.Errorf("先頭へ: %s", got)
+	}
+	post(t, ts, "/profiles/tech/move", url.Values{"to": {"up"}}) // 先頭より上はそのまま
+	post(t, ts, "/profiles/news/move", url.Values{"to": {"down"}})
+	if got := order(); got != "tech,main,news" {
+		t.Errorf("端での移動: %s", got)
+	}
+	// トップページは先頭のプロファイルを開く
+	resp, err := noRedirect().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if loc := resp.Header.Get("Location"); loc != "/p/tech/" {
+		t.Errorf("トップページの行き先: %s", loc)
+	}
+	_, body := get(t, ts, "/profiles")
+	if !strings.Contains(body, `<span class="tag">既定</span>`) {
+		t.Error("既定の表示がない")
+	}
+}

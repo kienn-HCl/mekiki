@@ -198,6 +198,11 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .danger-zone summary { color: var(--danger); cursor: pointer; }
 .panel { margin: 16px 0; }
 .secret { display: flex; gap: 6px; margin-top: 4px; }
+.profile-row { align-items: center; }
+.profile-row .order { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.profile-row .order form { margin: 0; }
+.profile-row .actions { margin-bottom: 0; }
+@media (max-width: 640px) { .profile-row { flex-direction: row; } }
 .secret input { margin-top: 0; flex: 1; min-width: 0; }
 .secret button { flex: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
