@@ -565,25 +565,6 @@ func (s *Store) SyncFeeds(ctx context.Context, profileID int64, defs []FeedDef) 
 	return tx.Commit()
 }
 
-// FeedDefs はプロファイルのフィード定義を登録順に返す。
-func (s *Store) FeedDefs(ctx context.Context, profileID int64) ([]FeedDef, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT title, url, category, enabled FROM feeds WHERE profile_id = ? ORDER BY position, id`, profileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []FeedDef
-	for rows.Next() {
-		var d FeedDef
-		if err := rows.Scan(&d.Title, &d.URL, &d.Category, &d.Enabled); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
-}
-
 // BackupTo はDB全体の一貫したコピーを path に書き出す（稼働中でも取れる）。
 func (s *Store) BackupTo(ctx context.Context, path string) error {
 	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)

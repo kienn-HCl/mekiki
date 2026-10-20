@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tzdataのない最小環境でもタイムゾーン設定を使えるように
@@ -40,7 +39,7 @@ const usage = `mekiki — RSSの注目記事をAIが選んで要約するWebア�
 環境変数:
   MEKIKI_ADDR       待ち受けアドレス（-addr の既定値。既定 :8080）
   MEKIKI_DATA       データディレクトリ（-data の既定値。既定 ./data）
-  MEKIKI_CONFIG     設定ファイル（-config の既定値。既定 <データディレクトリ>/config.toml）
+  MEKIKI_CONFIG     設定ディレクトリ（-config の既定値。config.toml と feeds/*.opml を置く。既定はデータディレクトリ）
   MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける
   MEKIKI_USER       Basic認証のユーザー名（既定 mekiki）
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
@@ -87,7 +86,7 @@ func env(key, def string) string {
 // openStore はDBを開き、設定ファイル（config.toml）の内容をDBに反映する。
 func openStore(fs *flag.FlagSet, args []string) (*store.Store, *conffile.Manager, error) {
 	data := fs.String("data", env("MEKIKI_DATA", "./data"), "データディレクトリ")
-	cfgPath := fs.String("config", env("MEKIKI_CONFIG", ""), "設定ファイル（既定 <data>/config.toml）")
+	cfgDir := fs.String("config", env("MEKIKI_CONFIG", ""), "設定ディレクトリ（config.toml と feeds/。既定はデータディレクトリ）")
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}
@@ -95,10 +94,10 @@ func openStore(fs *flag.FlagSet, args []string) (*store.Store, *conffile.Manager
 	if err != nil {
 		return nil, nil, err
 	}
-	if *cfgPath == "" {
-		*cfgPath = filepath.Join(*data, "config.toml")
+	if *cfgDir == "" {
+		*cfgDir = *data
 	}
-	conf := conffile.New(st, *cfgPath)
+	conf := conffile.New(st, *cfgDir)
 	if err := conf.Init(context.Background()); err != nil {
 		st.Close()
 		return nil, nil, err
@@ -140,17 +139,9 @@ func serve(args []string) error {
 	if err := st.FailStaleRuns(ctx, time.Now()); err != nil {
 		return err
 	}
-	if err := st.EnsureProfile(ctx); err != nil {
-		return err
-	}
-	if err := conf.Save(ctx); err != nil { // 初回起動で作ったプロファイルを書き出す
-		return err
-	}
-
 	a := app.New(st)
 	a.Conf = conf
-	go conf.Watch(ctx)
-	slog.Info("設定ファイル", "path", conf.Path)
+	slog.Info("設定ファイル", "path", conf.Path())
 	srv, err := web.New(a, env("MEKIKI_USER", "mekiki"), os.Getenv("MEKIKI_PASSWORD"))
 	if err != nil {
 		return err

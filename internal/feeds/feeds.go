@@ -38,6 +38,7 @@ type OPMLFeed struct {
 	Title    string
 	URL      string
 	Category string
+	Enabled  bool // disabled="true" 属性（mekiki独自。他のRSSリーダーでは無視される）がなければ true
 }
 
 type opmlOutline struct {
@@ -45,6 +46,7 @@ type opmlOutline struct {
 	Title    string        `xml:"title,attr,omitempty"`
 	Type     string        `xml:"type,attr,omitempty"`
 	XMLURL   string        `xml:"xmlUrl,attr,omitempty"`
+	Disabled string        `xml:"disabled,attr,omitempty"`
 	Outlines []opmlOutline `xml:"outline"`
 }
 
@@ -75,7 +77,8 @@ func ParseOPML(r io.Reader) ([]OPMLFeed, error) {
 		if title == "" {
 			title = o.XMLURL
 		}
-		out = append(out, OPMLFeed{Title: title, URL: strings.TrimSpace(o.XMLURL), Category: category})
+		out = append(out, OPMLFeed{Title: title, URL: strings.TrimSpace(o.XMLURL), Category: category,
+			Enabled: o.Disabled != "true"})
 	}
 	for _, top := range doc.Body.Outlines {
 		if top.XMLURL != "" {
@@ -108,7 +111,7 @@ func WriteOPML(w io.Writer, list []store.Feed) error {
 			idx[f.Category] = i
 		}
 		doc.Body.Outlines[i].Outlines = append(doc.Body.Outlines[i].Outlines,
-			opmlOutline{Text: f.Title, Type: "rss", XMLURL: f.URL})
+			outlineFor(f))
 	}
 	if _, err := io.WriteString(w, xml.Header); err != nil {
 		return err
@@ -116,6 +119,14 @@ func WriteOPML(w io.Writer, list []store.Feed) error {
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
 	return enc.Encode(doc)
+}
+
+func outlineFor(f store.Feed) opmlOutline {
+	o := opmlOutline{Text: f.Title, Type: "rss", XMLURL: f.URL}
+	if !f.Enabled {
+		o.Disabled = "true"
+	}
+	return o
 }
 
 // ---- 取得 ----

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,18 +22,24 @@ import (
 )
 
 func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
+	ts, st, _ := newServerWith(t, password)
+	return ts, st
+}
+
+func newServerWithConf(t *testing.T) (*httptest.Server, *store.Store, *conffile.Manager) {
+	return newServerWith(t, "")
+}
+
+func newServerWith(t *testing.T, password string) (*httptest.Server, *store.Store, *conffile.Manager) {
 	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if err := st.EnsureProfile(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	a := app.New(st)
-	a.Conf = conffile.New(st, filepath.Join(t.TempDir(), "config.toml"))
-	if err := a.Conf.Save(context.Background()); err != nil {
+	a.Conf = conffile.New(st, t.TempDir())
+	if err := a.Conf.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	srv, err := New(a, "me", password)
@@ -41,7 +48,7 @@ func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return ts, st
+	return ts, st, a.Conf
 }
 
 func seed(t *testing.T, st *store.Store) string {
@@ -374,26 +381,28 @@ func TestReorderProfilesAndDefault(t *testing.T) {
 }
 
 func TestConfigFileBackupAndRestore(t *testing.T) {
-	ts, st := newServer(t, "")
+	ts, st, conf := newServerWithConf(t)
 	ctx := context.Background()
 	post(t, ts, "/p/main/feeds/add", url.Values{"url": {"https://a.example/feed"}, "title": {"A"}})
 
-	// 画面での変更が設定ファイルに書き出される
-	code, body := get(t, ts, "/backup/config.toml")
-	if code != http.StatusOK || !strings.Contains(body, "url = 'https://a.example/feed'") {
-		t.Fatalf("設定ファイルのダウンロード: %d\n%s", code, body)
+	// 画面での変更がフィード一覧のOPMLに書き出される
+	opml, _ := os.ReadFile(filepath.Join(conf.Dir, "feeds", "main.opml"))
+	if !strings.Contains(string(opml), "https://a.example/feed") {
+		t.Fatalf("OPMLに書き出されていない:\n%s", opml)
+	}
+	code, body := get(t, ts, "/backup/config.zip")
+	if code != http.StatusOK || !strings.HasPrefix(body, "PK") {
+		t.Fatalf("設定一式のダウンロード: %d", code)
 	}
 	if code, db := get(t, ts, "/backup/mekiki.db"); code != http.StatusOK || !strings.HasPrefix(db, "SQLite format 3") {
 		t.Errorf("DBのダウンロード: %d", code)
 	}
 
-	// 復元: フィードを差し替えたファイルをアップロード
-	edited := strings.Replace(body, "https://a.example/feed", "https://b.example/feed", 1)
-	upload := func(data string) string {
+	upload := func(name string, data []byte) string {
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
-		fw, _ := mw.CreateFormFile("config", "config.toml")
-		fw.Write([]byte(data))
+		fw, _ := mw.CreateFormFile("config", name)
+		fw.Write(data)
 		mw.Close()
 		req, _ := http.NewRequest("POST", ts.URL+"/backup/restore", &buf)
 		req.Header.Set("Content-Type", mw.FormDataContentType())
@@ -404,21 +413,37 @@ func TestConfigFileBackupAndRestore(t *testing.T) {
 		resp.Body.Close()
 		return resp.Header.Get("Location")
 	}
-	if loc := upload(edited); !strings.Contains(loc, "msg=") {
+	// zipから復元（フィードを差し替えたもの）
+	b, _ := conffile.ReadZip([]byte(body))
+	b["feeds/main.opml"] = bytes.Replace(b["feeds/main.opml"], []byte("a.example"), []byte("b.example"), 1)
+	var zbuf bytes.Buffer
+	b.Zip(&zbuf)
+	if loc := upload("config.zip", zbuf.Bytes()); !strings.Contains(loc, "msg=") {
 		t.Fatalf("復元に失敗: %s", loc)
 	}
-	feeds, _ := st.Feeds(ctx, 1)
-	if len(feeds) != 1 || feeds[0].URL != "https://b.example/feed" {
+	if feeds, _ := st.Feeds(ctx, 1); len(feeds) != 1 || feeds[0].URL != "https://b.example/feed" {
 		t.Errorf("復元後のフィード: %+v", feeds)
 	}
-	if loc := upload("これはTOMLではない"); !strings.Contains(loc, "err=") {
+	if loc := upload("x.toml", []byte("これはTOMLではない")); !strings.Contains(loc, "err=") {
 		t.Errorf("壊れたファイルで復元できてしまう: %s", loc)
 	}
-	if feeds, _ := st.Feeds(ctx, 1); len(feeds) != 1 || feeds[0].URL != "https://b.example/feed" {
-		t.Errorf("失敗した復元で設定が変わった: %+v", feeds)
+
+	// サーバ上で設定ファイルが編集されたら、再起動するまで画面からの設定変更を止める
+	cfg := filepath.Join(conf.Dir, "config.toml")
+	data, _ := os.ReadFile(cfg)
+	os.WriteFile(cfg, append(data, []byte("\n# サーバで編集\n")...), 0o600)
+	if loc := post(t, ts, "/p/main/feeds/add", url.Values{"url": {"https://c.example/feed"}}); !strings.Contains(loc, "err=") {
+		t.Errorf("編集中のファイルがあるのに設定を変更できた: %s", loc)
+	}
+	if after, _ := os.ReadFile(cfg); !strings.Contains(string(after), "# サーバで編集") {
+		t.Error("サーバでの編集が上書きされた")
 	}
 	_, page := get(t, ts, "/settings")
-	if strings.Contains(page, "設定ファイルの変更を反映できませんでした") {
-		t.Error("アップロードの失敗がファイルのエラーとして表示されている")
+	if !strings.Contains(page, "mekikiを再起動して反映") {
+		t.Error("再起動を促す表示がない")
+	}
+	// 設定に関係ない操作（要約実行・既読など）は止めない
+	if loc := post(t, ts, "/p/main/articles/read", url.Values{}); strings.Contains(loc, "err=") {
+		t.Errorf("既読操作まで止まった: %s", loc)
 	}
 }

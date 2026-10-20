@@ -29,8 +29,8 @@ func TestParseOPML(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []OPMLFeed{
-		{Title: "LWN.net", URL: "https://lwn.net/headlines/rss", Category: "Linux・OS"},
-		{Title: "直下のフィード", URL: "https://ex.com/feed", Category: ""},
+		{Title: "LWN.net", URL: "https://lwn.net/headlines/rss", Category: "Linux・OS", Enabled: true},
+		{Title: "直下のフィード", URL: "https://ex.com/feed", Category: "", Enabled: true},
 	}
 	if len(list) != len(want) {
 		t.Fatalf("got %d feeds, want %d: %+v", len(list), len(want), list)
@@ -46,8 +46,9 @@ func TestOPMLRoundTrip(t *testing.T) {
 	in := []store.Feed{
 		{Title: "A", URL: "https://a.example/feed", Category: "技術"},
 		{Title: "B & C", URL: "https://b.example/rss?x=1&y=2", Category: "技術"},
-		{Title: "D", URL: "https://d.example/atom", Category: "ニュース"},
+		{Title: "D", URL: "https://d.example/atom", Category: "ニュース", Enabled: false},
 	}
+	in[0].Enabled, in[1].Enabled = true, true
 	var buf bytes.Buffer
 	if err := WriteOPML(&buf, in); err != nil {
 		t.Fatal(err)
@@ -60,7 +61,8 @@ func TestOPMLRoundTrip(t *testing.T) {
 		t.Fatalf("got %d, want %d", len(out), len(in))
 	}
 	for i := range in {
-		if out[i].Title != in[i].Title || out[i].URL != in[i].URL || out[i].Category != in[i].Category {
+		if out[i].Title != in[i].Title || out[i].URL != in[i].URL || out[i].Category != in[i].Category ||
+			out[i].Enabled != in[i].Enabled {
 			t.Errorf("[%d] got %+v, want %+v", i, out[i], in[i])
 		}
 	}

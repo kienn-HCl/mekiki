@@ -97,7 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /profiles", s.actionCreateProfile)
 	mux.HandleFunc("POST /profiles/{slug}/move", s.actionMoveProfile)
 	mux.HandleFunc("POST /actions/fetch", s.actionFetch)
-	mux.HandleFunc("GET /backup/config.toml", s.downloadConfig)
+	mux.HandleFunc("GET /backup/config.zip", s.downloadConfig)
 	mux.HandleFunc("GET /backup/mekiki.db", s.downloadDB)
 	mux.HandleFunc("POST /backup/restore", s.actionRestoreConfig)
 
@@ -180,15 +180,38 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// saveConfigAfterPost はPOST（設定・プロファイル・フィードの変更）の後に設定ファイルを書き出す。
-// 内容が変わっていなければ書かないので、設定に関係ないPOSTの後でも害はない。
+// saveConfigAfterPost は設定・プロファイル・フィードを変えるPOSTの後に設定ファイルを書き出す。
+// 設定ファイルがサーバ上で編集されたまま（再起動前）なら、編集内容を上書きしないよう変更自体を止める。
 func (s *Server) saveConfigAfterPost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-		if r.Method == http.MethodPost {
-			s.App.Conf.SaveOrLog(context.WithoutCancel(r.Context()))
+		if r.Method != http.MethodPost || !changesConfig(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
+		if err := s.App.Conf.CheckUnchanged(); err != nil {
+			to := "/settings"
+			if u, e := url.Parse(r.Referer()); e == nil && strings.HasPrefix(u.Path, "/") {
+				to = u.Path
+			}
+			http.Redirect(w, r, to+"?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+			return
+		}
+		next.ServeHTTP(w, r)
+		s.App.Conf.SaveOrLog(context.WithoutCancel(r.Context()))
 	})
+}
+
+// changesConfig は設定ファイルに書く内容を変えるPOSTか。
+func changesConfig(p string) bool {
+	if p == "/settings" || strings.HasPrefix(p, "/profiles") {
+		return true
+	}
+	rest, ok := strings.CutPrefix(p, "/p/")
+	if !ok {
+		return false
+	}
+	_, sub, _ := strings.Cut(rest, "/")
+	return sub == "settings" || sub == "delete" || (strings.HasPrefix(sub, "feeds/") && sub != "feeds/reset")
 }
 
 // sameOrigin は別サイトからのPOST（CSRF）を拒否する。
@@ -241,7 +264,7 @@ func (s *Server) base(r *http.Request, p config.Profile, nav, title string) base
 		Status:   s.App.Status(),
 		Profile:  p,
 		Profiles: profiles,
-		ConfErr:  s.App.Conf.LastError(),
+		ConfErr:  errString(s.App.Conf.CheckUnchanged()),
 	}
 	if p.ID != 0 {
 		b.Prefix = prefix(p)
@@ -949,6 +972,7 @@ type settingsData struct {
 	Providers []providerView
 	Timezones []tzOption
 	ConfPath  string
+	ConfDir   string
 }
 
 type tzOption struct{ Name, Label string }
@@ -986,7 +1010,8 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg,
 		Timezones: timezoneOptions(cfg.Timezone)}
 	if s.App.Conf != nil {
-		d.ConfPath = s.App.Conf.Path
+		d.ConfPath = s.App.Conf.Path()
+		d.ConfDir = s.App.Conf.Dir
 	}
 	for _, p := range config.Providers {
 		v := providerView{Provider: p, Model: cfg.Models[p.ID], Effort: cfg.Effort(p.ID), UseFetch: cfg.UseWebFetch(p.ID)}
@@ -1096,26 +1121,30 @@ func (s *Server) actionTestAI(w http.ResponseWriter, r *http.Request) {
 
 // ---- バックアップ ----
 
-// downloadConfig は現在の設定を config.toml として渡す（?secrets=0 ならAPIキー・Webhookを除く）。
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// downloadConfig は設定一式（config.toml と feeds/*.opml）をzipで渡す（?secrets=0 ならAPIキー・Webhookを除く）。
 func (s *Server) downloadConfig(w http.ResponseWriter, r *http.Request) {
-	f, err := conffile.Export(r.Context(), s.App.Store)
+	strip := r.URL.Query().Get("secrets") == "0"
+	b, err := conffile.ExportBundle(r.Context(), s.App.Store, strip)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	name := "mekiki-config.toml"
-	if r.URL.Query().Get("secrets") == "0" {
-		f.StripSecrets()
-		name = "mekiki-config-nosecrets.toml"
+	name := "mekiki-config-" + time.Now().Format("20060102")
+	if strip {
+		name += "-nosecrets"
 	}
-	data, err := conffile.Encode(f)
-	if err != nil {
-		serverError(w, err)
-		return
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.zip"`)
+	if err := b.Zip(w); err != nil {
+		slog.Error("設定一式の書き出しに失敗", "err", err)
 	}
-	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-	_, _ = w.Write(data)
 }
 
 // downloadDB はDB全体（記事・ページ・履歴を含む）の一貫したコピーを渡す。
@@ -1136,7 +1165,7 @@ func (s *Server) downloadDB(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-// actionRestoreConfig はアップロードされた config.toml で設定を置き換える。
+// actionRestoreConfig はアップロードされた設定一式（zip）または config.toml で設定を置き換える。
 func (s *Server) actionRestoreConfig(w http.ResponseWriter, r *http.Request) {
 	file, _, err := r.FormFile("config")
 	if err != nil {
@@ -1149,7 +1178,14 @@ func (s *Server) actionRestoreConfig(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	if err := s.App.Conf.Import(r.Context(), data); err != nil {
+	b := conffile.Bundle{"config.toml": data}
+	if bytes.HasPrefix(data, []byte("PK")) {
+		if b, err = conffile.ReadZip(data); err != nil {
+			back(w, r, "/settings", "err", err.Error())
+			return
+		}
+	}
+	if err := s.App.Conf.Restore(r.Context(), b); err != nil {
 		back(w, r, "/settings", "err", "設定ファイルを読み込めませんでした（何も変更していません）: "+err.Error())
 		return
 	}

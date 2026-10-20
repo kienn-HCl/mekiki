@@ -1,23 +1,33 @@
-// Package conffile は設定ファイル（config.toml）の読み書きを担う。
+// Package conffile は設定ファイル（config.toml とフィード一覧のOPML）の読み書きを担う。
 //
-// 設定（全体設定・プロファイル・フィード一覧）の正本は config.toml で、DBには実行時の写しを持つ。
-//   - Web画面での変更は DB を更新してから Save でファイルに書き出す
-//   - ファイルを直接編集すると、Watch が変更を検知して検証・反映する（再起動不要）
-//   - ファイルが不正なら反映せず、エラーを保持して画面に出す（前の設定のまま動く）
+// 設定の正本はファイルで、DBには実行時の写しを持つ。
+//   - 起動時に1回だけ読んでDBに反映する。書き間違いがあれば起動しない
+//   - Web画面での変更はDBを更新してからファイルに書き出す
+//   - サーバ上でファイルを編集したら、mekikiを再起動して反映する。再起動前に画面から設定を変えると
+//     手で直した内容を上書きしてしまうので、ファイルが外で変更されていたら画面からの変更を止める
+//
+// ファイルの構成（設定ディレクトリ。既定はデータディレクトリ）:
+//
+//	config.toml         全体設定とプロファイル
+//	feeds/<slug>.opml   プロファイルごとのフィード一覧
 //
 // 記事・ページ・実行履歴・フィードの取得状態はアプリが自動で作るデータなので DB にだけ持つ。
 package conffile
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,17 +36,18 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/kienn-HCl/mekiki/internal/config"
+	"github.com/kienn-HCl/mekiki/internal/feeds"
 	"github.com/kienn-HCl/mekiki/internal/store"
 )
 
 const header = `# mekiki の設定ファイル
 #
-# Web画面で保存するとこのファイルが書き換わり、このファイルを編集すると数秒でmekikiに反映されます
-# （再起動は不要。書き間違いがあれば反映されず、Web画面にエラーが表示されます）。
 # Web画面から保存し直すと、手で書いたコメントは消えます。
 # APIキー・Webhook URLを含むため、他の人に見せないでください。
 #
-# 記事・日付ページ・実行履歴は mekiki.db に保存されます（このファイルには入りません）。
+# Web画面で保存するとこのファイルが書き換わります。サーバ上で編集したら mekiki を再起動して反映してください
+# （書き間違いがあれば mekiki は起動せず、エラーの行を表示します）。
+# フィード一覧はプロファイルごとに feeds/<slug>.opml、記事・日付ページ・実行履歴は mekiki.db に保存されます。
 
 `
 
@@ -98,7 +109,6 @@ type Profile struct {
 	Overview       bool     `toml:"overview" comment:"今日のまとめを生成するか"`
 	DigestTimes    []string `toml:"digest_times" comment:"要約実行の時刻（HH:MM）。空なら手動のみ"`
 	Discord        Discord  `toml:"discord"`
-	Feeds          []Feed   `toml:"feeds"`
 }
 
 type Discord struct {
@@ -108,13 +118,6 @@ type Discord struct {
 	Embeds        int    `toml:"embeds_per_message"`
 	BaseURL       string `toml:"base_url" comment:"投稿にページへのリンクを付ける場合のWeb画面のURL"`
 	NotifyFailure bool   `toml:"notify_failure"`
-}
-
-type Feed struct {
-	Title    string `toml:"title"`
-	URL      string `toml:"url"`
-	Category string `toml:"category"`
-	Enabled  bool   `toml:"enabled"`
 }
 
 // ---- DB ⇔ ファイル ----
@@ -156,10 +159,6 @@ func Export(ctx context.Context, st *store.Store) (*File, error) {
 		return nil, err
 	}
 	for _, p := range profiles {
-		defs, err := st.FeedDefs(ctx, p.ID)
-		if err != nil {
-			return nil, err
-		}
 		fp := Profile{
 			ID: p.ID, Slug: p.Slug, Name: p.Name, Interests: p.UserMemory, SelectCriteria: p.SelectCriteria,
 			PickCount: p.PickCount, HoursBack: p.HoursBack, Overview: p.Overview,
@@ -168,9 +167,6 @@ func Export(ctx context.Context, st *store.Store) (*File, error) {
 				Webhook: p.DiscordWebhook, Title: p.DiscordTitle, Color: fmt.Sprintf("%06X", p.DiscordColor),
 				Embeds: p.DiscordEmbeds, BaseURL: p.DiscordBaseURL, NotifyFailure: p.DiscordAfterFail,
 			},
-		}
-		for _, d := range defs {
-			fp.Feeds = append(fp.Feeds, Feed{Title: d.Title, URL: d.URL, Category: d.Category, Enabled: d.Enabled})
 		}
 		f.Profiles = append(f.Profiles, fp)
 	}
@@ -229,7 +225,6 @@ func Decode(data []byte) (*File, error) {
 type resolved struct {
 	settings config.Settings
 	profiles []config.Profile
-	feeds    [][]store.FeedDef
 }
 
 func (f *File) resolve() (*resolved, error) {
@@ -307,195 +302,348 @@ func (f *File) resolve() (*resolved, error) {
 			}
 			ids[p.ID] = true
 		}
-		var defs []store.FeedDef
-		seen := map[string]bool{}
-		for j, ff := range fp.Feeds {
-			u, err := url.Parse(strings.TrimSpace(ff.URL))
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				return nil, fmt.Errorf("%s の%d番目のフィード: URLが不正です: %q", where, j+1, ff.URL)
-			}
-			if seen[u.String()] {
-				return nil, fmt.Errorf("%s: フィードのURLが重複しています: %s", where, u)
-			}
-			seen[u.String()] = true
-			title := strings.TrimSpace(ff.Title)
-			if title == "" {
-				title = u.Host
-			}
-			defs = append(defs, store.FeedDef{Title: title, URL: u.String(), Category: strings.TrimSpace(ff.Category), Enabled: ff.Enabled})
-		}
 		r.profiles = append(r.profiles, p)
-		r.feeds = append(r.feeds, defs)
 	}
 	return r, nil
 }
 
-// ---- 管理 ----
+// ---- フィード一覧（OPML） ----
 
-// Manager はファイルとDBの同期を受け持つ。
-type Manager struct {
-	Store *store.Store
-	Path  string
+func feedsFile(dir, slug string) string { return filepath.Join(dir, "feeds", slug+".opml") }
 
-	mu      sync.Mutex
-	lastSum [32]byte  // 最後に読み書きした内容のハッシュ（自分の書き込みを変更と誤検知しない）
-	lastMod time.Time // 最後に確認したファイルの更新時刻
-	lastErr string    // 最後のファイル読み込みエラー（画面に出す）
+// parseFeeds はOPMLをフィード定義にする（URLを検証し、重複は最初のものだけ残す）。
+func parseFeeds(data []byte, where string) ([]store.FeedDef, error) {
+	list, err := feeds.ParseOPML(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", where, err)
+	}
+	var defs []store.FeedDef
+	seen := map[string]bool{}
+	for i, f := range list {
+		u, err := url.Parse(f.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("%s の%d番目のフィード: URLが不正です: %q", where, i+1, f.URL)
+		}
+		if seen[u.String()] {
+			continue
+		}
+		seen[u.String()] = true
+		title := strings.TrimSpace(f.Title)
+		if title == "" || title == f.URL {
+			title = u.Host
+		}
+		defs = append(defs, store.FeedDef{Title: title, URL: u.String(), Category: f.Category, Enabled: f.Enabled})
+	}
+	return defs, nil
 }
 
-func New(st *store.Store, path string) *Manager { return &Manager{Store: st, Path: path} }
-
-// Init は起動時に呼ぶ。ファイルがあればDBに反映し、なければDBの設定から作る。
-func (m *Manager) Init(ctx context.Context) error {
-	data, err := os.ReadFile(m.Path)
-	if errors.Is(err, os.ErrNotExist) {
-		slog.Info("設定ファイルを作成", "path", m.Path)
-		return m.Save(ctx)
-	}
+func encodeFeeds(ctx context.Context, st *store.Store, profileID int64) ([]byte, error) {
+	list, err := st.Feeds(ctx, profileID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := m.apply(ctx, data, "起動時"); err != nil {
-		return fmt.Errorf("設定ファイル %s: %w", m.Path, err)
+	var buf bytes.Buffer
+	if err := feeds.WriteOPML(&buf, list); err != nil {
+		return nil, err
 	}
-	return nil
+	return buf.Bytes(), nil
 }
 
-// Save はDBの設定をファイルに書き出す。Web画面で設定を変えたら呼ぶ。
-func (m *Manager) Save(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	f, err := Export(ctx, m.Store)
+// ---- 一式（config.toml + feeds/*.opml） ----
+
+// Bundle は設定ファイル一式（パス（設定ディレクトリからの相対） → 内容）。
+type Bundle map[string][]byte
+
+const configName = "config.toml"
+
+// ExportBundle はDBの設定をファイル一式にする。stripSecrets ならAPIキー・Webhookを除く。
+func ExportBundle(ctx context.Context, st *store.Store, stripSecrets bool) (Bundle, error) {
+	f, err := Export(ctx, st)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(f.Profiles) == 0 {
-		return nil // 初回起動の途中。プロファイルができてから書く
+	if stripSecrets {
+		f.StripSecrets()
 	}
 	data, err := Encode(f)
 	if err != nil {
+		return nil, err
+	}
+	b := Bundle{configName: data}
+	profiles, err := st.Profiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range profiles {
+		opml, err := encodeFeeds(ctx, st, p.ID)
+		if err != nil {
+			return nil, err
+		}
+		b[filepath.ToSlash(filepath.Join("feeds", p.Slug+".opml"))] = opml
+	}
+	return b, nil
+}
+
+// Zip は一式をzipにする。
+func (b Bundle) Zip(w io.Writer) error {
+	zw := zip.NewWriter(w)
+	names := make([]string, 0, len(b))
+	for n := range b {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fw, err := zw.Create(n)
+		if err != nil {
+			return err
+		}
+		if _, err := fw.Write(b[n]); err != nil {
+			return err
+		}
+	}
+	return zw.Close()
+}
+
+// ReadZip はzipから一式を読む（config.toml と feeds/*.opml 以外は無視）。
+func ReadZip(data []byte) (Bundle, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("zipとして読めません: %w", err)
+	}
+	b := Bundle{}
+	for _, f := range zr.File {
+		name := path.Clean(strings.TrimPrefix(f.Name, "./"))
+		if name != configName && !(strings.HasPrefix(name, "feeds/") && strings.HasSuffix(name, ".opml") && !strings.Contains(name[6:], "/")) {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+		content, err := io.ReadAll(io.LimitReader(rc, 10<<20))
+		rc.Close()
+		if err != nil {
+			return nil, err
+		}
+		b[name] = content
+	}
+	if _, ok := b[configName]; !ok {
+		return nil, errors.New("zipに config.toml がありません")
+	}
+	return b, nil
+}
+
+// ---- 管理 ----
+
+// Manager は設定ディレクトリとDBの同期を受け持つ。
+type Manager struct {
+	Store *store.Store
+	Dir   string // 設定ディレクトリ（config.toml と feeds/ を置く）
+
+	mu   sync.Mutex
+	sums map[string][32]byte // 最後に読み書きしたファイルの内容（外で編集されたかの判定用。nil = 未確認）
+}
+
+func New(st *store.Store, dir string) *Manager { return &Manager{Store: st, Dir: dir} }
+
+// Path は config.toml のパス。
+func (m *Manager) Path() string { return filepath.Join(m.Dir, configName) }
+
+// Init は起動時に呼ぶ。設定ファイル一式を読んでDBに反映する。ファイルに不備があればエラー（起動しない）。
+// config.toml がなければ既定の設定（プロファイル「メイン」1つ）で作る。
+func (m *Manager) Init(ctx context.Context) error {
+	data, err := os.ReadFile(m.Path())
+	if errors.Is(err, os.ErrNotExist) {
+		slog.Info("設定ファイルがないため既定の設定で作成します", "path", m.Path())
+		data, err = Encode(DefaultFile())
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(m.Path(), data); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(data)
-	if sum == m.lastSum {
-		return nil
+	b := Bundle{configName: data}
+	f, err := Decode(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", m.Path(), err)
 	}
-	if err := writeAtomic(m.Path, data); err != nil {
-		return fmt.Errorf("設定ファイルの書き込みに失敗: %w", err)
+	for _, p := range f.Profiles {
+		rel := filepath.ToSlash(filepath.Join("feeds", strings.TrimSpace(p.Slug)+".opml"))
+		if content, err := os.ReadFile(filepath.Join(m.Dir, rel)); err == nil {
+			b[rel] = content
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
-	m.lastSum = sum
-	if fi, err := os.Stat(m.Path); err == nil {
-		m.lastMod = fi.ModTime()
+	if err := m.apply(ctx, b, true); err != nil {
+		return fmt.Errorf("%s: %w", m.Dir, err)
 	}
-	m.lastErr = ""
+	// 読んだ内容を記録する（書き直さないので、手で書いたコメントは画面から保存するまで残る）
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sums = map[string][32]byte{}
+	for rel, data := range b {
+		m.sums[rel] = sha256.Sum256(data)
+	}
 	return nil
 }
 
-// SaveOrLog は Save の失敗をログに残すだけの版（画面操作の後に呼ぶ）。
-func (m *Manager) SaveOrLog(ctx context.Context) {
+// DefaultFile は初回起動用の既定の設定。
+func DefaultFile() *File {
+	s := config.Defaults()
+	p := config.DefaultProfile("main", "メイン")
+	f := &File{Settings: Settings{
+		Backend: s.Backend, Timezone: s.Timezone, FetchInterval: s.FetchInterval,
+		ArticlesPerFeed: s.ArticlesPerFeed, MaxFailures: s.MaxFailures,
+		FailureRetryHours: s.FailureRetryHours, RetentionDays: s.RetentionDays,
+		AI: AISettings{
+			Anthropic: APIProvider{Effort: s.Efforts[config.BackendAnthropic], WebFetch: ptr(true)},
+			CLI:       CLIProvider{Path: s.CLIPath, WebFetch: true},
+		},
+	}}
+	f.Profiles = []Profile{{
+		Slug: p.Slug, Name: p.Name, SelectCriteria: p.SelectCriteria, PickCount: p.PickCount,
+		HoursBack: p.HoursBack, Overview: p.Overview, DigestTimes: p.DigestTimes,
+		Discord: Discord{Title: p.DiscordTitle, Color: fmt.Sprintf("%06X", p.DiscordColor),
+			Embeds: p.DiscordEmbeds, NotifyFailure: p.DiscordAfterFail},
+	}}
+	return f
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// ErrEditedOnDisk は設定ファイルがサーバ上で編集されたまま、まだ反映されていないこと。
+var ErrEditedOnDisk = errors.New("設定ファイルがサーバ上で編集されています。mekikiを再起動して反映してから操作してください" +
+	"（このまま画面から設定を変えると、ファイルの編集内容が上書きされます）")
+
+// CheckUnchanged は設定ファイルが最後に読み書きしたときから外で変更されていないか確かめる。
+func (m *Manager) CheckUnchanged() error {
 	if m == nil {
-		return
+		return nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.checkLocked()
+}
+
+func (m *Manager) checkLocked() error {
+	if m.sums == nil {
+		return nil
+	}
+	for rel, sum := range m.sums {
+		data, err := os.ReadFile(filepath.Join(m.Dir, rel))
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrEditedOnDisk
+		}
+		if err != nil {
+			return err
+		}
+		if sha256.Sum256(data) != sum {
+			return ErrEditedOnDisk
+		}
+	}
+	return nil
+}
+
+// Save はDBの設定をファイル一式に書き出す。Web画面で設定を変えたら呼ぶ。
+func (m *Manager) Save(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkLocked(); err != nil {
+		return err
+	}
+	return m.writeLocked(ctx)
+}
+
+// SaveOrLog は Save の失敗をログに残すだけの版。
+func (m *Manager) SaveOrLog(ctx context.Context) {
 	if err := m.Save(ctx); err != nil {
 		slog.Error("設定ファイルの保存に失敗", "err", err)
 	}
 }
 
-// Import はアップロードされた設定ファイルを検証してDBとファイルに反映する（復元用）。
-func (m *Manager) Import(ctx context.Context, data []byte) error {
-	// 失敗してもファイルは変えていないので、ファイルのエラー表示（lastErr）には残さない
-	m.mu.Lock()
-	err := m.applyLocked(ctx, data, "アップロード")
-	m.mu.Unlock()
+func (m *Manager) writeLocked(ctx context.Context) error {
+	b, err := ExportBundle(ctx, m.Store, false)
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := writeAtomic(m.Path, data); err != nil {
-		return err
+	sums := map[string][32]byte{}
+	for rel, data := range b {
+		sum := sha256.Sum256(data)
+		sums[rel] = sum
+		if old, ok := m.sums[rel]; ok && old == sum {
+			continue
+		}
+		if err := writeAtomic(filepath.Join(m.Dir, rel), data); err != nil {
+			return fmt.Errorf("設定ファイルの書き込みに失敗: %w", err)
+		}
 	}
-	m.lastSum = sha256.Sum256(data)
-	if fi, err := os.Stat(m.Path); err == nil {
-		m.lastMod = fi.ModTime()
+	// 消えたプロファイル（・変わったslug）のOPMLを片付ける
+	for rel := range m.sums {
+		if _, ok := sums[rel]; !ok {
+			_ = os.Remove(filepath.Join(m.Dir, rel))
+		}
 	}
+	m.sums = sums
 	return nil
 }
 
-// LastError は直近のファイル読み込みエラー（なければ空）。
-func (m *Manager) LastError() string {
-	if m == nil {
-		return ""
-	}
+// Restore はアップロードされた一式（zip または config.toml 単体）で設定を置き換える（復元用）。
+// config.toml 単体のときは、フィード一覧は今のものを残す。
+func (m *Manager) Restore(ctx context.Context, b Bundle) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.lastErr
+	if err := m.checkLocked(); err != nil {
+		return err
+	}
+	if err := m.applyLocked(ctx, b, b.hasFeeds()); err != nil {
+		return err
+	}
+	return m.writeLocked(ctx)
 }
 
-// Watch はファイルの変更を数秒おきに確認し、変わっていれば反映する。ctxが終わるまで戻らない。
-func (m *Manager) Watch(ctx context.Context) {
-	t := time.NewTicker(3 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		fi, err := os.Stat(m.Path)
-		if err != nil {
-			continue
-		}
-		m.mu.Lock()
-		changed := !fi.ModTime().Equal(m.lastMod)
-		m.mu.Unlock()
-		if !changed {
-			continue
-		}
-		data, err := os.ReadFile(m.Path)
-		if err != nil {
-			continue
-		}
-		m.mu.Lock()
-		m.lastMod = fi.ModTime()
-		same := sha256.Sum256(data) == m.lastSum
-		if same {
-			m.lastErr = "" // 書き間違いを直して、最後に反映した内容に戻った
-		}
-		m.mu.Unlock()
-		if same {
-			continue
-		}
-		if err := m.apply(ctx, data, "ファイルの変更"); err != nil {
-			slog.Error("設定ファイルの変更を反映できません（前の設定のまま動きます）", "path", m.Path, "err", err)
-		} else {
-			slog.Info("設定ファイルの変更を反映しました", "path", m.Path)
+func (b Bundle) hasFeeds() bool {
+	for rel := range b {
+		if strings.HasPrefix(rel, "feeds/") {
+			return true
 		}
 	}
+	return false
 }
 
-// apply はファイルの内容を検証してDBに反映する。失敗したらDBは変えず、エラーを保持する。
-func (m *Manager) apply(ctx context.Context, data []byte, reason string) error {
+func (m *Manager) apply(ctx context.Context, b Bundle, syncFeeds bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	err := m.applyLocked(ctx, data, reason)
-	if err != nil {
-		m.lastErr = err.Error()
-		return err
-	}
-	m.lastErr = ""
-	m.lastSum = sha256.Sum256(data)
-	return nil
+	return m.applyLocked(ctx, b, syncFeeds)
 }
 
-func (m *Manager) applyLocked(ctx context.Context, data []byte, reason string) error {
-	f, err := Decode(data)
+// applyLocked は一式を検証してDBに反映する。検証に失敗したらDBは変えない。
+// syncFeeds なら各プロファイルのフィード一覧をOPMLに合わせる（OPMLがないプロファイルはフィードなし）。
+func (m *Manager) applyLocked(ctx context.Context, b Bundle, syncFeeds bool) error {
+	f, err := Decode(b[configName])
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", configName, err)
 	}
 	r, err := f.resolve()
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", configName, err)
+	}
+	feedDefs := make([][]store.FeedDef, len(r.profiles))
+	if syncFeeds {
+		for i, p := range r.profiles {
+			rel := "feeds/" + p.Slug + ".opml"
+			if data, ok := b[rel]; ok {
+				if feedDefs[i], err = parseFeeds(data, rel); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	st := m.Store
 	existing, err := st.Profiles(ctx)
@@ -529,8 +677,7 @@ func (m *Manager) applyLocked(ctx context.Context, data []byte, reason string) e
 	}
 	// プロファイルを消すとページ・履歴も消えるので、先にDB全体を退避しておく
 	if len(removed) > 0 {
-		backup := filepath.Join(filepath.Dir(m.Path), "backups",
-			fmt.Sprintf("mekiki-%s.db", time.Now().Format("20060102-150405")))
+		backup := filepath.Join(m.Dir, "backups", fmt.Sprintf("mekiki-%s.db", time.Now().Format("20060102-150405")))
 		if err := os.MkdirAll(filepath.Dir(backup), 0o700); err != nil {
 			return err
 		}
@@ -541,8 +688,7 @@ func (m *Manager) applyLocked(ctx context.Context, data []byte, reason string) e
 		for _, p := range removed {
 			names = append(names, p.Slug)
 		}
-		slog.Warn("設定ファイルにないプロファイルを削除します", "reason", reason,
-			"profiles", strings.Join(names, ","), "backup", backup)
+		slog.Warn("設定ファイルにないプロファイルを削除します", "profiles", strings.Join(names, ","), "backup", backup)
 	}
 
 	if err := st.SetSettings(ctx, r.settings.Map()); err != nil {
@@ -578,8 +724,10 @@ func (m *Manager) applyLocked(ctx context.Context, data []byte, reason string) e
 			p.ID = id
 		}
 		order[i] = p.ID
-		if err := st.SyncFeeds(ctx, p.ID, r.feeds[i]); err != nil {
-			return err
+		if syncFeeds {
+			if err := st.SyncFeeds(ctx, p.ID, feedDefs[i]); err != nil {
+				return err
+			}
 		}
 	}
 	return st.SetProfileOrder(ctx, order)

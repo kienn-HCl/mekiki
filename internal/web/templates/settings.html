@@ -85,18 +85,21 @@
 
 <fieldset class="backup">
   <legend>設定ファイルとバックアップ</legend>
-  <p class="muted small">設定（この画面・各プロファイル設定・フィード一覧）は {{if .ConfPath}}<code>{{.ConfPath}}</code>{{else}}設定ファイル{{end}} に保存されています。
-  サーバ上でテキストエディタで直接編集すると、数秒で反映されます（再起動は不要）。記事・日付ページ・実行履歴はデータベース（mekiki.db）に入っています。</p>
+  <p class="muted small">設定は {{if .ConfPath}}<code>{{.ConfPath}}</code>{{else}}config.toml{{end}}、フィード一覧はプロファイルごとに
+  <code>{{if .ConfDir}}{{.ConfDir}}/{{end}}feeds/&lt;プロファイルID&gt;.opml</code> に保存されています。
+  サーバ上でテキストエディタで編集したら、mekikiを再起動すると反映されます（書き間違いがあればエラーを出して起動しません）。
+  記事・日付ページ・実行履歴はデータベース（mekiki.db）に入っています。</p>
   <div class="actions">
-    <a class="button" href="/backup/config.toml">設定ファイルをダウンロード</a>
-    <a class="button" href="/backup/config.toml?secrets=0">APIキー・Webhookを除いてダウンロード</a>
+    <a class="button" href="/backup/config.zip">設定一式をダウンロード（zip）</a>
+    <a class="button" href="/backup/config.zip?secrets=0">APIキー・Webhookを除いてダウンロード</a>
     <a class="button" href="/backup/mekiki.db">データ全体（mekiki.db）をダウンロード</a>
   </div>
   <form method="post" action="/backup/restore" enctype="multipart/form-data" class="inline"
-        onsubmit="return confirm('アップロードした設定ファイルで、全体設定・プロファイル・フィード一覧を置き換えます。ファイルにないプロファイルはページ・履歴ごと削除されます（削除前のDBは backups/ に退避します）。よろしいですか？')">
-    <input type="file" name="config" accept=".toml,text/plain" required>
-    <button>設定ファイルから復元</button>
+        onsubmit="return confirm('アップロードしたファイルで、全体設定・プロファイル（zipならフィード一覧も）を置き換えます。ファイルにないプロファイルはページ・履歴ごと削除されます（削除前のDBは backups/ に退避します）。よろしいですか？')">
+    <input type="file" name="config" accept=".zip,.toml" required>
+    <button>設定一式から復元</button>
   </form>
-  <p class="muted small">データ全体を戻すときは、mekikiを止めてから mekiki.db をデータディレクトリに置き直してください。</p>
+  <p class="muted small">復元には設定一式のzipか config.toml を使えます（config.toml だけのときはフィード一覧は今のまま）。
+  データ全体を戻すときは、mekikiを止めてから mekiki.db をデータディレクトリに置き直してください。</p>
 </fieldset>
 {{end}}

@@ -34,8 +34,7 @@
 <main>
 {{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
 {{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
-{{if .ConfErr}}<div class="flash err">設定ファイルの変更を反映できませんでした（前の設定のまま動いています）: {{.ConfErr}}
-  <br><span class="small">ファイルを直すと自動で反映されます。この状態で画面から設定を保存すると、ファイルは画面の設定で上書きされます。</span></div>{{end}}
+{{if .ConfErr}}<div class="flash err">{{.ConfErr}}</div>{{end}}
 {{template "content" .}}
 </main>
 <footer class="foot">mekiki</footer>
