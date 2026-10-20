@@ -113,9 +113,9 @@ func (t *Tracker) Line() string {
 	t.mu.Unlock()
 	tot := t.Total()
 	if len(parts) == 0 {
-		return "Claude呼び出しなし"
+		return "AI呼び出しなし"
 	}
-	return fmt.Sprintf("Claude使用量: %s / in %s tok (cache %s) / out %s tok",
+	return fmt.Sprintf("AI使用量: %s / in %s tok (cache %s) / out %s tok",
 		strings.Join(parts, "・"), comma(tot.Input), comma(tot.CacheRead), comma(tot.Output))
 }
 

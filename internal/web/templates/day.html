@@ -1,23 +1,23 @@
 {{define "content"}}
 <section class="dayhead">
   <div class="daynav">
-    {{if .Prev}}<a href="/day/{{.Prev}}">← {{fmtDate .Prev}}</a>{{else}}<span></span>{{end}}
-    {{if .Next}}<a href="{{if eq .Next .Today}}/{{else}}/day/{{.Next}}{{end}}">{{fmtDate .Next}} →</a>{{end}}
+    {{if .Prev}}<a href="{{.Prefix}}/day/{{.Prev}}">← {{fmtDate .Prev}}</a>{{else}}<span></span>{{end}}
+    {{if .Next}}<a href="{{.Prefix}}/{{if ne .Next .Today}}day/{{.Next}}{{end}}">{{fmtDate .Next}} →</a>{{end}}
   </div>
-  <h1>{{fmtDate .Date}}{{if .IsToday}} <span class="tag">今日</span>{{end}}</h1>
+  <h1><span class="pname">{{.Profile.Name}}</span> {{fmtDate .Date}}{{if .IsToday}} <span class="tag">今日</span>{{end}}</h1>
   <p class="muted">
     {{if .Exists}}{{.Page.ItemCount}}件 · 最終更新 {{fmtTime .Page.UpdatedAt}}{{else}}まだページがありません{{end}}
-    {{if .IsToday}} · 要約実行時刻: {{range $i, $t := .Settings.DigestTimes}}{{if $i}}, {{end}}{{$t}}{{else}}未設定（手動のみ）{{end}}{{end}}
+    {{if .IsToday}} · 要約実行時刻: {{range $i, $t := .Profile.DigestTimes}}{{if $i}}, {{end}}{{$t}}{{else}}未設定（手動のみ）{{end}}{{end}}
   </p>
   {{if .IsToday}}
   <div class="actions">
-    <form method="post" action="/actions/digest">
-      <input type="hidden" name="back" value="/">
+    <form method="post" action="{{.Prefix}}/actions/digest">
+      <input type="hidden" name="back" value="{{.Prefix}}/">
       <button class="primary" {{if .Status.Digesting}}disabled{{end}}>今すぐ要約実行（新着分を追記）</button>
     </form>
-    <form method="post" action="/actions/rebuild"
+    <form method="post" action="{{.Prefix}}/actions/rebuild"
           onsubmit="return confirm('今日のページを消して、今日の候補記事から作り直します。よろしいですか？')">
-      <input type="hidden" name="back" value="/">
+      <input type="hidden" name="back" value="{{.Prefix}}/">
       <button class="danger" {{if .Status.Digesting}}disabled{{end}}>今日のページを作り直す</button>
     </form>
   </div>
@@ -36,7 +36,8 @@
   {{if .IsToday}}
   <p>今日のピックアップはまだありません。</p>
   <p class="muted">設定した時刻になると自動で作成されます。すぐに作るには「今すぐ要約実行」を押してください。
-  フィードが未登録なら <a href="/feeds">フィード管理</a> から追加し、AI連携は <a href="/settings">設定</a> で行います。</p>
+  {{if not .HasFeeds}}このプロファイルにはフィードがありません。<a href="{{.Prefix}}/feeds">フィード管理</a> から追加してください。{{end}}
+  AI連携は <a href="/settings">全体設定</a>、選定基準や実行時刻は <a href="{{.Prefix}}/settings">プロファイル設定</a> で行います。</p>
   {{else}}
   <p>この日のページはありません。</p>
   {{end}}

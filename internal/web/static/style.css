@@ -45,15 +45,24 @@ code { background: var(--border); padding: 0 .3em; border-radius: 4px; }
 .tag { font-size: .7em; vertical-align: middle; background: var(--accent); color: var(--accent-text); padding: .1em .6em; border-radius: 99px; }
 
 .topbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px;
-  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 8px 16px 0; background: var(--surface); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 10;
 }
+.toprow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-bottom: 6px; }
 .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); }
 .brand small { color: var(--muted); font-weight: 400; }
 .topbar nav { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .topbar nav a { color: var(--muted); padding: 2px 0; }
-.topbar nav a.active { color: var(--text); font-weight: 600; border-bottom: 2px solid var(--accent); }
+.topbar nav.profiles { flex: 1; gap: 4px 6px; }
+.topbar nav.profiles a { padding: 1px 10px; border: 1px solid var(--border); border-radius: 99px; font-size: .9em; }
+.topbar nav.profiles a.active { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+.topbar nav.profiles a.manage { border-style: dashed; }
+.topbar .gear { color: var(--muted); font-size: .9em; }
+.topbar .gear.active, .topbar nav.profiles a.manage.active { color: var(--text); font-weight: 600; }
+.topbar nav.sub { padding: 2px 0 0; }
+.topbar nav.sub a { padding: 4px 0; }
+.topbar nav.sub a.active { color: var(--text); font-weight: 600; border-bottom: 2px solid var(--accent); }
+.pname { color: var(--muted); font-weight: 500; }
 
 .busy { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 6px 16px; background: var(--ok-bg); font-size: .9em; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -158,6 +167,9 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .settings fieldset { margin: 16px 0; }
 .settings legend { font-weight: 700; padding: 0 6px; }
 .settings .sub { border-left: 3px solid var(--border); padding-left: 12px; margin: 8px 0; }
-.settings .sub h3 { font-size: .95rem; margin: .5em 0 0; }
+.settings .sub summary { cursor: pointer; font-weight: 600; font-size: .95rem; }
+.danger-zone { margin: 24px 0; border: 1px solid var(--danger); border-radius: 10px; padding: 8px 16px; }
+.danger-zone summary { color: var(--danger); cursor: pointer; }
+.panel { margin: 16px 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 16px; }
 .foot { text-align: center; color: var(--muted); font-size: .8em; padding: 24px 16px; }

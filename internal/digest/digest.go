@@ -51,36 +51,39 @@ const (
 // Runner は要約実行の本体。同時に1つしか走らせない。
 type Runner struct {
 	Store *store.Store
-	// FetchFeeds は実行前にフィードを取得する関数（取得処理側の排他を通すため外から渡す）
-	FetchFeeds func(ctx context.Context) error
-	// NewBackend は設定からClaude呼び出しの経路を作る（テストで差し替える）
+	// FetchFeeds は実行前にプロファイルのフィードを取得する関数（取得処理側の排他を通すため外から渡す）
+	FetchFeeds func(ctx context.Context, profileID int64) error
+	// NewBackend は設定からAI呼び出しの経路を作る（テストで差し替える）
 	NewBackend func(s config.Settings) (ai.Backend, error)
 
-	mu      sync.Mutex
-	running bool
+	mu        sync.Mutex
+	running   bool
+	runningID int64 // 実行中のプロファイル
 }
 
 var ErrBusy = errors.New("要約実行中です")
 
 type Options struct {
-	Kind    string
-	Trigger string
-	Slot    string // 定時実行の枠（"07:00"）
+	ProfileID int64
+	Kind      string
+	Trigger   string
+	Slot      string // 定時実行の枠（"07:00"）
 }
 
-func (r *Runner) Running() bool {
+// Running は実行中かどうかと、実行中のプロファイルIDを返す。
+func (r *Runner) Running() (profileID int64, running bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.running
+	return r.runningID, r.running
 }
 
-func (r *Runner) begin() bool {
+func (r *Runner) begin(profileID int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.running {
 		return false
 	}
-	r.running = true
+	r.running, r.runningID = true, profileID
 	return true
 }
 
@@ -92,7 +95,7 @@ func (r *Runner) end() {
 
 // Run は要約実行を1回行う。結果は runs テーブルに記録される。実行中なら ErrBusy。
 func (r *Runner) Run(ctx context.Context, opt Options) error {
-	if !r.begin() {
+	if !r.begin(opt.ProfileID) {
 		return ErrBusy
 	}
 	defer r.end()
@@ -102,13 +105,13 @@ func (r *Runner) Run(ctx context.Context, opt Options) error {
 // Start は要約実行をバックグラウンドで開始する。実行中なら ErrBusy。
 // 実行中フラグは戻る前に立つので、直後の画面表示から実行中として見える。
 func (r *Runner) Start(opt Options) error {
-	if !r.begin() {
+	if !r.begin(opt.ProfileID) {
 		return ErrBusy
 	}
 	go func() {
 		defer r.end()
 		if err := r.run(context.Background(), opt); err != nil {
-			slog.Error("要約実行失敗", "kind", opt.Kind, "trigger", opt.Trigger, "slot", opt.Slot, "err", err)
+			slog.Error("要約実行失敗", "profile", opt.ProfileID, "kind", opt.Kind, "trigger", opt.Trigger, "slot", opt.Slot, "err", err)
 		}
 	}()
 	return nil
@@ -120,16 +123,20 @@ func (r *Runner) run(ctx context.Context, opt Options) error {
 		return err
 	}
 	cfg := config.Load(kv)
+	prof, err := r.Store.Profile(ctx, opt.ProfileID)
+	if err != nil {
+		return fmt.Errorf("プロファイル %d: %w", opt.ProfileID, err)
+	}
 	now := time.Now()
 	date := now.In(cfg.Location()).Format("2006-01-02")
 
-	run := store.Run{Date: date, Kind: opt.Kind, Trigger: opt.Trigger, Slot: opt.Slot, StartedAt: now}
+	run := store.Run{ProfileID: prof.ID, Date: date, Kind: opt.Kind, Trigger: opt.Trigger, Slot: opt.Slot, StartedAt: now}
 	run.ID, err = r.Store.StartRun(ctx, run)
 	if err != nil {
 		return err
 	}
 	tracker := ai.NewTracker()
-	j := &job{r: r, cfg: cfg, date: date, run: &run, tracker: tracker}
+	j := &job{r: r, cfg: cfg, prof: prof, date: date, run: &run, tracker: tracker}
 	runErr := j.do(ctx)
 
 	run.FinishedAt = time.Now()
@@ -146,10 +153,10 @@ func (r *Runner) run(ctx context.Context, opt Options) error {
 	if err := r.Store.FinishRun(context.WithoutCancel(ctx), run); err != nil {
 		slog.Error("実行結果の記録に失敗", "err", err)
 	}
-	slog.Info("要約実行終了", "run", run.ID, "status", run.Status, "message", run.Message, "usage", tracker.Line())
-	if runErr != nil && cfg.DiscordWebhook != "" && cfg.DiscordAfterFail {
-		msg := fmt.Sprintf("-# ⚠️ mekiki 要約実行失敗（%s）: %s", date, oneLine(runErr.Error(), 200))
-		if err := discord.New(cfg.DiscordWebhook).SendContent(context.WithoutCancel(ctx), msg); err != nil {
+	slog.Info("要約実行終了", "profile", prof.Slug, "run", run.ID, "status", run.Status, "message", run.Message, "usage", tracker.Line())
+	if runErr != nil && prof.DiscordWebhook != "" && prof.DiscordAfterFail {
+		msg := fmt.Sprintf("-# ⚠️ mekiki 要約実行失敗（%s %s）: %s", prof.Name, date, oneLine(runErr.Error(), 200))
+		if err := discord.New(prof.DiscordWebhook).SendContent(context.WithoutCancel(ctx), msg); err != nil {
 			slog.Error("失敗通知の送信自体に失敗", "err", err)
 		}
 	}
@@ -159,6 +166,7 @@ func (r *Runner) run(ctx context.Context, opt Options) error {
 type job struct {
 	r       *Runner
 	cfg     config.Settings
+	prof    config.Profile
 	date    string
 	run     *store.Run
 	tracker *ai.Tracker
@@ -181,17 +189,17 @@ func (j *job) do(ctx context.Context) error {
 	}
 
 	if j.r.FetchFeeds != nil {
-		if err := j.r.FetchFeeds(ctx); err != nil {
+		if err := j.r.FetchFeeds(ctx, j.prof.ID); err != nil {
 			slog.Warn("実行前のフィード取得に失敗（取得済みの記事で続行）", "err", err)
 		}
 	}
 
 	now := time.Now()
-	candidates, err := st.Candidates(ctx, now.Add(-time.Duration(j.cfg.HoursBack)*time.Hour), ignoreDate)
+	candidates, err := st.Candidates(ctx, j.prof.ID, now.Add(-time.Duration(j.prof.HoursBack)*time.Hour), ignoreDate)
 	if err != nil {
 		return err
 	}
-	titles, err := st.RecentPageTitles(ctx, now.AddDate(0, 0, -titleDedupDays), ignoreDate)
+	titles, err := st.RecentPageTitles(ctx, j.prof.ID, now.AddDate(0, 0, -titleDedupDays), ignoreDate)
 	if err != nil {
 		return err
 	}
@@ -200,11 +208,13 @@ func (j *job) do(ctx context.Context) error {
 		kept = newest(kept, selectMaxArticles)
 	}
 	j.run.Candidates = len(kept)
-	slog.Info("要約実行開始", "run", j.run.ID, "kind", j.run.Kind, "candidates", len(kept), "dedup_dropped", len(dropped))
+	slog.Info("要約実行開始", "profile", j.prof.Slug, "run", j.run.ID, "kind", j.run.Kind, "candidates", len(kept), "dedup_dropped", len(dropped))
 
 	if len(kept) == 0 {
-		if err := j.clearIfRebuild(ctx); err != nil {
-			return err
+		if j.run.Kind == KindRebuild {
+			if err := st.AppendItems(ctx, j.prof.ID, j.date, nil, now, true); err != nil {
+				return fmt.Errorf("ページの削除に失敗: %w", err)
+			}
 		}
 		if err := st.MarkConsidered(ctx, ids(dropped), j.date, j.run.ID); err != nil {
 			return err
@@ -216,7 +226,7 @@ func (j *job) do(ctx context.Context) error {
 
 	var existing []store.PageItem
 	if j.run.Kind != KindRebuild {
-		if existing, err = st.PageItems(ctx, j.date); err != nil {
+		if existing, err = st.PageItems(ctx, j.prof.ID, j.date); err != nil {
 			return err
 		}
 	}
@@ -235,7 +245,7 @@ func (j *job) do(ctx context.Context) error {
 			okCount++
 		}
 	}
-	// 全件失敗はClaude呼び出し自体の全体障害とみなし、ページに載せず候補も消費しない
+	// 全件失敗はAI呼び出し自体の全体障害とみなし、ページに載せず候補も消費しない
 	if len(results) > 0 && okCount == 0 {
 		return fmt.Errorf("要約が全件失敗しました（%d件）。AI連携の設定・認証を確認してください", len(results))
 	}
@@ -257,14 +267,9 @@ func (j *job) do(ctx context.Context) error {
 			Image:     res.image,
 		}
 	}
-	if err := j.clearIfRebuild(ctx); err != nil {
-		return err
-	}
-	saveAt := time.Now()
-	if len(items) > 0 {
-		if err := st.AppendItems(ctx, j.date, items, saveAt); err != nil {
-			return fmt.Errorf("ページへの保存に失敗: %w", err)
-		}
+	// 再作成ではここで今日のページを置き換える（選定・要約が成功するまで元のページを残す）
+	if err := st.AppendItems(ctx, j.prof.ID, j.date, items, time.Now(), j.run.Kind == KindRebuild); err != nil {
+		return fmt.Errorf("ページへの保存に失敗: %w", err)
 	}
 	if err := st.MarkConsidered(ctx, append(ids(kept), ids(dropped)...), j.date, j.run.ID); err != nil {
 		return err
@@ -276,28 +281,18 @@ func (j *job) do(ctx context.Context) error {
 	}
 	j.run.Message = fmt.Sprintf("%d件を追加（要約成功%d件）", len(items), okCount)
 
-	if j.cfg.Overview {
+	if j.prof.Overview {
 		j.updateOverview(ctx)
 	}
-	if j.cfg.DiscordWebhook != "" {
+	if j.prof.DiscordWebhook != "" {
 		j.postDiscord(ctx, items)
 	}
 	return nil
 }
 
-func (j *job) clearIfRebuild(ctx context.Context) error {
-	if j.run.Kind != KindRebuild {
-		return nil
-	}
-	if err := j.r.Store.ClearPage(ctx, j.date); err != nil {
-		return fmt.Errorf("ページの削除に失敗: %w", err)
-	}
-	return nil
-}
-
-// selectArticles は候補タイトル一覧を1回のClaude呼び出しに渡して記事を選ばせる。
+// selectArticles は候補タイトル一覧を1回のAI呼び出しに渡して記事を選ばせる。
 func (j *job) selectArticles(ctx context.Context, candidates []store.Article, existing []store.PageItem) ([]store.Article, error) {
-	prompt := buildSelectPrompt(candidates, existing, j.cfg.PickCount, j.cfg.SelectCriteria, j.cfg.UserMemory)
+	prompt := buildSelectPrompt(candidates, existing, j.prof.PickCount, j.prof.SelectCriteria, j.prof.UserMemory)
 	resp, err := j.backend.Complete(ctx, ai.Request{
 		Stage: "select", Prompt: prompt, JSONSchema: selectSchema, Timeout: selectTimeout,
 	})
@@ -309,7 +304,7 @@ func (j *job) selectArticles(ctx context.Context, candidates []store.Article, ex
 	if err != nil {
 		return nil, err
 	}
-	return PickByIndexes(candidates, idx, j.cfg.PickCount), nil
+	return PickByIndexes(candidates, idx, j.prof.PickCount), nil
 }
 
 // ParseIndexes は選定応答をパースし、範囲内のindexだけを返す（範囲外は無視）。
@@ -405,7 +400,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 
 	if len([]rune(text)) >= textMinChars {
 		resp, err := j.backend.Complete(ctx, ai.Request{
-			Stage: "summarize", Prompt: buildSummaryPrompt(a.Title, text, j.cfg.UserMemory),
+			Stage: "summarize", Prompt: buildSummaryPrompt(a.Title, text, j.prof.UserMemory),
 			Timeout: summaryTimeout,
 		})
 		j.tracker.Record("summarize", resp.Usage)
@@ -418,7 +413,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 		// 本文がほぼ取れない → WebFetch救済（タイトルのみの要約もこのプロンプトが兼ねる）
 		resp, err := j.backend.Complete(ctx, ai.Request{
 			Stage: "summarize_fallback", Prompt: buildFallbackPrompt(a.Title, a.Link),
-			AllowWebFetch: j.cfg.WebFetch, Timeout: fallbackTimeout,
+			AllowWebFetch: j.cfg.WebFetch && j.cfg.SupportsWebFetch(), Timeout: fallbackTimeout,
 		})
 		j.tracker.Record("summarize_fallback", resp.Usage)
 		if err != nil {
@@ -435,7 +430,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 		res.image = extract.SanitizeImageURL(a.Image, a.Link)
 	}
 	if res.image == "" {
-		// 画像のためだけのページ取得はClaudeのトークンを消費しないので行ってよい
+		// 画像のためだけのページ取得はAIのトークンを消費しないので行ってよい
 		fetch()
 		if og := extract.OGImage(pageHTML); og != "" {
 			res.image = extract.SanitizeImageURL(og, a.Link)
@@ -445,7 +440,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 }
 
 func (j *job) updateOverview(ctx context.Context) {
-	all, err := j.r.Store.PageItems(ctx, j.date)
+	all, err := j.r.Store.PageItems(ctx, j.prof.ID, j.date)
 	if err != nil || len(all) == 0 {
 		return
 	}
@@ -459,28 +454,28 @@ func (j *job) updateOverview(ctx context.Context) {
 		return
 	}
 	resp, err := j.backend.Complete(ctx, ai.Request{
-		Stage: "overview", Prompt: buildOverviewPrompt(ok, j.cfg.UserMemory), Timeout: overviewTimeout,
+		Stage: "overview", Prompt: buildOverviewPrompt(ok, j.prof.UserMemory), Timeout: overviewTimeout,
 	})
 	j.tracker.Record("overview", resp.Usage)
 	if err != nil {
 		slog.Warn("今日のまとめの生成に失敗", "err", err)
 		return
 	}
-	if err := j.r.Store.SetOverview(ctx, j.date, resp.Text, time.Now()); err != nil {
+	if err := j.r.Store.SetOverview(ctx, j.prof.ID, j.date, resp.Text, time.Now()); err != nil {
 		slog.Warn("今日のまとめの保存に失敗", "err", err)
 	}
 }
 
 func (j *job) postDiscord(ctx context.Context, items []store.PageItem) {
-	c := discord.New(j.cfg.DiscordWebhook)
+	c := discord.New(j.prof.DiscordWebhook)
 	label := "追加"
 	if j.run.Kind == KindRebuild {
 		label = "再作成"
 	}
 	header := fmt.Sprintf("## %s\n%s — %s%d件",
-		j.cfg.DiscordTitle, time.Now().In(j.cfg.Location()).Format("2006/01/02 15:04 MST"), label, len(items))
-	if base := strings.TrimRight(j.cfg.DiscordBaseURL, "/"); base != "" {
-		header += fmt.Sprintf("\n%s/day/%s", base, j.date)
+		j.prof.DiscordTitle, time.Now().In(j.cfg.Location()).Format("2006/01/02 15:04 MST"), label, len(items))
+	if base := strings.TrimRight(j.prof.DiscordBaseURL, "/"); base != "" {
+		header += fmt.Sprintf("\n%s/p/%s/day/%s", base, j.prof.Slug, j.date)
 	}
 	if err := c.SendContent(ctx, header); err != nil {
 		slog.Error("Discordへのヘッダー送信に失敗（投稿を中止）", "err", err)
@@ -489,9 +484,9 @@ func (j *job) postDiscord(ctx context.Context, items []store.PageItem) {
 	embeds := make([]discord.Embed, len(items))
 	for i, it := range items {
 		embeds[i] = discord.NewEmbed(it.Title, it.Link, it.Summary,
-			it.Category+" / "+it.FeedName, it.Image, j.cfg.DiscordColor)
+			it.Category+" / "+it.FeedName, it.Image, j.prof.DiscordColor)
 	}
-	posted := c.PostEmbeds(ctx, embeds, j.cfg.DiscordEmbeds)
+	posted := c.PostEmbeds(ctx, embeds, j.prof.DiscordEmbeds)
 	slog.Info("Discord投稿完了", "posted", len(posted), "total", len(embeds))
 	if err := c.SendContent(ctx, "-# "+j.tracker.Line()); err != nil {
 		slog.Warn("使用量サマリの送信失敗", "err", err)

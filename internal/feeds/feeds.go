@@ -142,10 +142,10 @@ type outcome struct {
 	err           error
 }
 
-// FetchAll は有効な全フィードを並列取得して新着記事をDBに保存する。
-func FetchAll(ctx context.Context, st *store.Store, opt Options, now time.Time) (Result, error) {
+// FetchAll は有効なフィード（profileIDが0なら全プロファイル）を並列取得して新着記事をDBに保存する。
+func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options, now time.Time) (Result, error) {
 	start := time.Now()
-	all, err := st.Feeds(ctx)
+	all, err := st.Feeds(ctx, profileID)
 	if err != nil {
 		return Result{}, err
 	}

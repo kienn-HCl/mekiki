@@ -15,6 +15,7 @@ import (
 	_ "time/tzdata" // tzdataのない最小環境でもタイムゾーン設定を使えるように
 
 	"github.com/kienn-HCl/mekiki/internal/app"
+	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
 	"github.com/kienn-HCl/mekiki/internal/store"
@@ -27,16 +28,19 @@ const usage = `mekiki — RSSをAIが目利きして要約するWebアプリ
 
 使い方:
   mekiki serve [-addr :8080] [-data ./data]   Webサーバとスケジューラを起動
-  mekiki import-opml [-data ./data] FILE      OPMLからフィードを登録
-  mekiki fetch [-data ./data]                 フィードを1回取得
-  mekiki digest [-data ./data] [-rebuild]     要約実行を1回行う（今日のページに追記）
+  mekiki import-opml [-profile ID] FILE       OPMLからフィードを登録（-new でプロファイルも作成）
+  mekiki fetch [-data ./data]                 全フィードを1回取得
+  mekiki digest [-profile ID] [-rebuild]      要約実行を1回行う（今日のページに追記）
+
+  -profile を省略すると最初のプロファイルが対象。各コマンドとも -data でデータディレクトリを指定
   mekiki version
 
 環境変数:
   MEKIKI_ADDR       待ち受けアドレス（-addr の既定値。既定 :8080）
   MEKIKI_DATA       データディレクトリ（-data の既定値。既定 ./data）
   MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける（ユーザー名は任意）
-  ANTHROPIC_API_KEY 画面でAPIキーを設定していない場合に使うキー
+  ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
+                    画面でAPIキーを設定していない場合に使うキー
 `
 
 func main() {
@@ -84,6 +88,26 @@ func openStore(fs *flag.FlagSet, args []string) (*store.Store, error) {
 	return store.Open(*data)
 }
 
+// findProfile は -profile で指定されたプロファイル（空なら最初のもの）を返す。
+func findProfile(st *store.Store, slug string) (config.Profile, error) {
+	ctx := context.Background()
+	if slug != "" {
+		p, err := st.ProfileBySlug(ctx, slug)
+		if errors.Is(err, store.ErrNotFound) {
+			return p, fmt.Errorf("プロファイル %q がありません", slug)
+		}
+		return p, err
+	}
+	if err := st.EnsureProfile(ctx); err != nil {
+		return config.Profile{}, err
+	}
+	list, err := st.Profiles(ctx)
+	if err != nil {
+		return config.Profile{}, err
+	}
+	return list[0], nil
+}
+
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", env("MEKIKI_ADDR", ":8080"), "待ち受けアドレス")
@@ -96,6 +120,9 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := st.FailStaleRuns(ctx, time.Now()); err != nil {
+		return err
+	}
+	if err := st.EnsureProfile(ctx); err != nil {
 		return err
 	}
 
@@ -128,6 +155,8 @@ func serve(args []string) error {
 
 func importOPML(args []string) error {
 	fs := flag.NewFlagSet("import-opml", flag.ExitOnError)
+	slug := fs.String("profile", "", "登録先のプロファイルID")
+	newName := fs.String("new", "", "このプロファイル名で -profile のプロファイルを新規作成してから登録")
 	st, err := openStore(fs, args)
 	if err != nil {
 		return err
@@ -145,9 +174,22 @@ func importOPML(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *newName != "" {
+		p := config.DefaultProfile(*slug, *newName)
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if _, err := st.CreateProfile(context.Background(), p); err != nil {
+			return err
+		}
+	}
+	p, err := findProfile(st, *slug)
+	if err != nil {
+		return err
+	}
 	added := 0
 	for _, fd := range list {
-		ok, err := st.AddFeed(context.Background(), fd.Title, fd.URL, fd.Category)
+		ok, err := st.AddFeed(context.Background(), p.ID, fd.Title, fd.URL, fd.Category)
 		if err != nil {
 			return err
 		}
@@ -155,7 +197,7 @@ func importOPML(args []string) error {
 			added++
 		}
 	}
-	fmt.Printf("%d件を追加しました（%d件は登録済み）\n", added, len(list)-added)
+	fmt.Printf("プロファイル「%s」に%d件を追加しました（%d件は登録済み）\n", p.Name, added, len(list)-added)
 	return nil
 }
 
@@ -166,7 +208,7 @@ func fetchOnce(args []string) error {
 		return err
 	}
 	defer st.Close()
-	res, err := app.New(st).FetchNow(context.Background())
+	res, err := app.New(st).FetchNow(context.Background(), 0)
 	if err != nil {
 		return err
 	}
@@ -178,14 +220,19 @@ func fetchOnce(args []string) error {
 func digestOnce(args []string) error {
 	fs := flag.NewFlagSet("digest", flag.ExitOnError)
 	rebuild := fs.Bool("rebuild", false, "今日のページを作り直す")
+	slug := fs.String("profile", "", "対象のプロファイルID")
 	st, err := openStore(fs, args)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	p, err := findProfile(st, *slug)
+	if err != nil {
+		return err
+	}
 	kind := digest.KindAppend
 	if *rebuild {
 		kind = digest.KindRebuild
 	}
-	return app.New(st).Digest.Run(context.Background(), digest.Options{Kind: kind, Trigger: digest.TriggerManual})
+	return app.New(st).Digest.Run(context.Background(), digest.Options{ProfileID: p.ID, Kind: kind, Trigger: digest.TriggerManual})
 }

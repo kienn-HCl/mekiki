@@ -1,4 +1,6 @@
 // Package web はWeb画面（日付ページ・RSSリーダー・フィード管理・設定）のHTTPハンドラ。
+//
+// プロファイルごとの画面は /p/{slug}/... 、サーバ全体の設定は /settings、プロファイル一覧は /profiles。
 package web
 
 import (
@@ -7,6 +9,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -62,7 +65,7 @@ func New(a *app.App, password string) (*Server, error) {
 			return map[string]string{digest.TriggerSchedule: "定時", digest.TriggerManual: "手動"}[s]
 		},
 	}
-	pages := []string{"day", "archive", "articles", "feeds", "settings", "runs"}
+	pages := []string{"day", "archive", "articles", "feeds", "settings", "profile", "profiles", "runs"}
 	for _, p := range pages {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets,
 			"templates/layout.html", "templates/"+p+".html")
@@ -77,29 +80,72 @@ func New(a *app.App, password string) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(assets))
-	mux.HandleFunc("GET /{$}", s.today)
-	mux.HandleFunc("GET /day/{date}", s.day)
-	mux.HandleFunc("GET /archive", s.archive)
-	mux.HandleFunc("GET /articles", s.articles)
+	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /go/{id}", s.goArticle)
-	mux.HandleFunc("GET /feeds", s.feedsPage)
-	mux.HandleFunc("GET /feeds/export.opml", s.exportOPML)
-	mux.HandleFunc("GET /settings", s.settingsPage)
-	mux.HandleFunc("GET /runs", s.runs)
 	mux.HandleFunc("GET /api/status", s.status)
-
-	mux.HandleFunc("POST /actions/fetch", s.actionFetch)
-	mux.HandleFunc("POST /actions/digest", s.actionDigest)
-	mux.HandleFunc("POST /actions/rebuild", s.actionRebuild)
-	mux.HandleFunc("POST /articles/read", s.actionMarkRead)
-	mux.HandleFunc("POST /feeds/add", s.actionAddFeed)
-	mux.HandleFunc("POST /feeds/import", s.actionImportOPML)
-	mux.HandleFunc("POST /feeds/{id}/update", s.actionUpdateFeed)
-	mux.HandleFunc("POST /feeds/{id}/delete", s.actionDeleteFeed)
-	mux.HandleFunc("POST /feeds/reset", s.actionResetFailures)
+	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.actionSaveSettings)
 	mux.HandleFunc("POST /settings/test", s.actionTestAI)
+	mux.HandleFunc("GET /profiles", s.profilesPage)
+	mux.HandleFunc("POST /profiles", s.actionCreateProfile)
+	mux.HandleFunc("POST /actions/fetch", s.actionFetch)
+
+	p := func(pattern string, h profileHandler) {
+		method, path, _ := strings.Cut(pattern, " ")
+		mux.HandleFunc(method+" /p/{slug}"+path, s.withProfile(h))
+	}
+	p("GET /{$}", s.today)
+	p("GET /day/{date}", s.day)
+	p("GET /archive", s.archive)
+	p("GET /articles", s.articles)
+	p("GET /feeds", s.feedsPage)
+	p("GET /feeds/export.opml", s.exportOPML)
+	p("GET /runs", s.runs)
+	p("GET /settings", s.profilePage)
+	p("POST /settings", s.actionSaveProfile)
+	p("POST /delete", s.actionDeleteProfile)
+	p("POST /actions/digest", s.actionDigest)
+	p("POST /actions/rebuild", s.actionRebuild)
+	p("POST /articles/read", s.actionMarkRead)
+	p("POST /feeds/add", s.actionAddFeed)
+	p("POST /feeds/import", s.actionImportOPML)
+	p("POST /feeds/{id}/update", s.actionUpdateFeed)
+	p("POST /feeds/{id}/delete", s.actionDeleteFeed)
+	p("POST /feeds/reset", s.actionResetFailures)
 	return s.auth(sameOrigin(mux))
+}
+
+type profileHandler func(w http.ResponseWriter, r *http.Request, p config.Profile)
+
+func (s *Server) withProfile(h profileHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := s.App.Store.ProfileBySlug(r.Context(), r.PathValue("slug"))
+		if errors.Is(err, store.ErrNotFound) {
+			http.Redirect(w, r, "/profiles?err="+url.QueryEscape("プロファイルが見つかりません"), http.StatusSeeOther)
+			return
+		}
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		h(w, r, p)
+	}
+}
+
+func prefix(p config.Profile) string { return "/p/" + p.Slug }
+
+// home は最初のプロファイルの今日のページへ飛ばす。
+func (s *Server) home(w http.ResponseWriter, r *http.Request) {
+	list, err := s.App.Store.Profiles(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if len(list) == 0 {
+		http.Redirect(w, r, "/profiles", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, prefix(list[0])+"/", http.StatusSeeOther)
 }
 
 // ---- ミドルウェア ----
@@ -142,25 +188,49 @@ func sameOrigin(next http.Handler) http.Handler {
 // ---- 共通 ----
 
 type base struct {
-	Title  string
-	Nav    string
-	Flash  string
-	Error  string
-	Today  string
-	Status app.Status
+	Title    string
+	Nav      string
+	Flash    string
+	Error    string
+	Today    string
+	Status   app.Status
+	Profile  config.Profile   // 表示中のプロファイル（全体画面ではゼロ値）
+	Profiles []config.Profile // 切り替え用
+	Prefix   string           // /p/{slug}
+	Busy     string           // 実行中ジョブの説明
 }
 
-func (s *Server) base(r *http.Request, nav, title string) base {
-	cfg, _ := s.App.Settings(r.Context())
+func (s *Server) base(r *http.Request, p config.Profile, nav, title string) base {
+	ctx := r.Context()
+	cfg, _ := s.App.Settings(ctx)
 	s.loc.Store(cfg.Location())
-	return base{
-		Title:  title,
-		Nav:    nav,
-		Flash:  r.URL.Query().Get("msg"),
-		Error:  r.URL.Query().Get("err"),
-		Today:  time.Now().In(cfg.Location()).Format("2006-01-02"),
-		Status: s.App.Status(),
+	profiles, _ := s.App.Store.Profiles(ctx)
+	b := base{
+		Title:    title,
+		Nav:      nav,
+		Flash:    r.URL.Query().Get("msg"),
+		Error:    r.URL.Query().Get("err"),
+		Today:    time.Now().In(cfg.Location()).Format("2006-01-02"),
+		Status:   s.App.Status(),
+		Profile:  p,
+		Profiles: profiles,
 	}
+	if p.ID != 0 {
+		b.Prefix = prefix(p)
+	}
+	switch {
+	case b.Status.Digesting:
+		name := ""
+		for _, pr := range profiles {
+			if pr.ID == b.Status.DigestingProfile {
+				name = "「" + pr.Name + "」の"
+			}
+		}
+		b.Busy = name + "要約実行中です。完了すると自動で再読み込みします…"
+	case b.Status.Fetching:
+		b.Busy = "フィードを取得中です…"
+	}
+	return b
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -212,44 +282,44 @@ type dayData struct {
 	Groups     []runGroup
 	Prev, Next string
 	Runs       []store.Run
-	Settings   config.Settings
+	HasFeeds   bool
 }
 
-func (s *Server) today(w http.ResponseWriter, r *http.Request) {
-	s.renderDay(w, r, "")
+func (s *Server) today(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	s.renderDay(w, r, p, "")
 }
 
-func (s *Server) day(w http.ResponseWriter, r *http.Request) {
+func (s *Server) day(w http.ResponseWriter, r *http.Request, p config.Profile) {
 	date := r.PathValue("date")
 	if _, err := time.Parse("2006-01-02", date); err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	s.renderDay(w, r, date)
+	s.renderDay(w, r, p, date)
 }
 
-func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, date string) {
+func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, p config.Profile, date string) {
 	ctx := r.Context()
-	b := s.base(r, "day", "")
+	b := s.base(r, p, "day", "")
 	if date == "" {
 		date = b.Today
 	}
-	b.Title = fmtDate(date)
+	b.Title = p.Name + " " + fmtDate(date)
 	if date != b.Today {
 		b.Nav = "archive"
 	}
 	st := s.App.Store
-	page, exists, err := st.Page(ctx, date)
+	page, exists, err := st.Page(ctx, p.ID, date)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	items, err := st.PageItems(ctx, date)
+	items, err := st.PageItems(ctx, p.ID, date)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	runs, err := st.RunsOn(ctx, date)
+	runs, err := st.RunsOn(ctx, p.ID, date)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -270,7 +340,7 @@ func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, date string) 
 		g := &groups[len(groups)-1]
 		g.Items = append(g.Items, it)
 	}
-	prev, next, err := st.AdjacentDates(ctx, date)
+	prev, next, err := st.AdjacentDates(ctx, p.ID, date)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -280,15 +350,15 @@ func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, date string) 
 	} else if next == "" && date < b.Today {
 		next = b.Today
 	}
-	cfg, _ := s.App.Settings(ctx)
+	feedList, _ := st.Feeds(ctx, p.ID)
 	s.render(w, "day", dayData{
 		base: b, Date: date, IsToday: date == b.Today, Page: page, Exists: exists,
-		Groups: groups, Prev: prev, Next: next, Runs: runs, Settings: cfg,
+		Groups: groups, Prev: prev, Next: next, Runs: runs, HasFeeds: len(feedList) > 0,
 	})
 }
 
-func (s *Server) archive(w http.ResponseWriter, r *http.Request) {
-	pages, err := s.App.Store.Pages(r.Context())
+func (s *Server) archive(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	pages, err := s.App.Store.Pages(r.Context(), p.ID)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -296,7 +366,7 @@ func (s *Server) archive(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "archive", struct {
 		base
 		Pages []store.Page
-	}{s.base(r, "archive", "アーカイブ"), pages})
+	}{s.base(r, p, "archive", p.Name+" アーカイブ"), pages})
 }
 
 // ---- RSSリーダー ----
@@ -322,7 +392,7 @@ func groupFeeds(list []store.Feed) []feedGroup {
 	return out
 }
 
-func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
+func (s *Server) articles(w http.ResponseWriter, r *http.Request, p config.Profile) {
 	ctx := r.Context()
 	q := r.URL.Query()
 	feedID, _ := strconv.ParseInt(q.Get("feed"), 10, 64)
@@ -332,7 +402,7 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
 	pageNo = max(pageNo, 1)
 
 	list, err := s.App.Store.Articles(ctx, store.ArticleFilter{
-		FeedID: feedID, Category: category, UnreadOnly: unread,
+		ProfileID: p.ID, FeedID: feedID, Category: category, UnreadOnly: unread,
 		Limit: articlesPerPage + 1, Offset: (pageNo - 1) * articlesPerPage,
 	})
 	if err != nil {
@@ -343,7 +413,7 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
 	if hasNext {
 		list = list[:articlesPerPage]
 	}
-	allFeeds, err := s.App.Store.Feeds(ctx)
+	allFeeds, err := s.App.Store.Feeds(ctx, p.ID)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -357,7 +427,7 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
 	if category != "" {
 		title = category
 	}
-	link := func(p int) string {
+	link := func(n int) string {
 		v := url.Values{}
 		if feedID > 0 {
 			v.Set("feed", strconv.FormatInt(feedID, 10))
@@ -368,13 +438,13 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
 		if unread {
 			v.Set("unread", "1")
 		}
-		if p > 1 {
-			v.Set("page", strconv.Itoa(p))
+		if n > 1 {
+			v.Set("page", strconv.Itoa(n))
 		}
 		if len(v) == 0 {
-			return "/articles"
+			return prefix(p) + "/articles"
 		}
-		return "/articles?" + v.Encode()
+		return prefix(p) + "/articles?" + v.Encode()
 	}
 	toggle := url.Values{}
 	if feedID > 0 {
@@ -399,9 +469,9 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request) {
 		ToggleURL  string
 		CurrentURL string
 	}{
-		base: s.base(r, "articles", title), Articles: list, Groups: groupFeeds(allFeeds),
+		base: s.base(r, p, "articles", title), Articles: list, Groups: groupFeeds(allFeeds),
 		FeedID: feedID, Category: category, Unread: unread, Page: pageNo,
-		ToggleURL: "/articles?" + toggle.Encode(), CurrentURL: link(pageNo),
+		ToggleURL: prefix(p) + "/articles?" + toggle.Encode(), CurrentURL: link(pageNo),
 	}
 	if pageNo > 1 {
 		data.PrevURL = link(pageNo - 1)
@@ -429,19 +499,19 @@ func (s *Server) goArticle(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, a.Link, http.StatusFound)
 }
 
-func (s *Server) actionMarkRead(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionMarkRead(w http.ResponseWriter, r *http.Request, p config.Profile) {
 	feedID, _ := strconv.ParseInt(r.FormValue("feed"), 10, 64)
-	if err := s.App.Store.MarkAllRead(r.Context(), feedID); err != nil {
+	if err := s.App.Store.MarkAllRead(r.Context(), p.ID, feedID); err != nil {
 		serverError(w, err)
 		return
 	}
-	back(w, r, "/articles", "msg", "既読にしました")
+	back(w, r, prefix(p)+"/articles", "msg", "既読にしました")
 }
 
 // ---- フィード管理 ----
 
-func (s *Server) feedsPage(w http.ResponseWriter, r *http.Request) {
-	list, err := s.App.Store.Feeds(r.Context())
+func (s *Server) feedsPage(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	list, err := s.App.Store.Feeds(r.Context(), p.ID)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -461,16 +531,17 @@ func (s *Server) feedsPage(w http.ResponseWriter, r *http.Request) {
 		Count       int
 		Categories  []string
 		MaxFailures int
-	}{s.base(r, "feeds", "フィード管理"), groupFeeds(list), len(list), cats, cfg.MaxFailures})
+	}{s.base(r, p, "feeds", p.Name+" フィード管理"), groupFeeds(list), len(list), cats, cfg.MaxFailures})
 }
 
-func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/feeds"
 	feedURL := strings.TrimSpace(r.FormValue("url"))
 	title := strings.TrimSpace(r.FormValue("title"))
 	category := strings.TrimSpace(r.FormValue("category"))
 	u, err := url.Parse(feedURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		back(w, r, "/feeds", "err", "フィードURLが不正です")
+		back(w, r, fallback, "err", "フィードURLが不正です")
 		return
 	}
 	if title == "" {
@@ -479,130 +550,140 @@ func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request) {
 			title = u.Host
 		}
 	}
-	added, err := s.App.Store.AddFeed(r.Context(), title, feedURL, category)
+	added, err := s.App.Store.AddFeed(r.Context(), p.ID, title, feedURL, category)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	if !added {
-		back(w, r, "/feeds", "err", "そのURLは登録済みです")
+		back(w, r, fallback, "err", "そのURLはこのプロファイルに登録済みです")
 		return
 	}
-	back(w, r, "/feeds", "msg", "「"+title+"」を追加しました。次回の取得から記事が集まります")
+	back(w, r, fallback, "msg", "「"+title+"」を追加しました。次回の取得から記事が集まります")
 }
 
 // probeFeedTitle はタイトル未入力のフィード追加時に、フィード自体からタイトルを取る。
 func probeFeedTitle(ctx context.Context, feedURL string) string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	p := gofeed.NewParser()
-	p.UserAgent = feeds.UserAgent
-	f, err := p.ParseURLWithContext(feedURL, ctx)
+	fp := gofeed.NewParser()
+	fp.UserAgent = feeds.UserAgent
+	f, err := fp.ParseURLWithContext(feedURL, ctx)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(extract.HTMLToText(f.Title))
 }
 
-func (s *Server) actionImportOPML(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionImportOPML(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/feeds"
 	file, _, err := r.FormFile("opml")
 	if err != nil {
-		back(w, r, "/feeds", "err", "OPMLファイルを選択してください")
+		back(w, r, fallback, "err", "OPMLファイルを選択してください")
 		return
 	}
 	defer file.Close()
 	list, err := feeds.ParseOPML(io.LimitReader(file, 5<<20))
 	if err != nil {
-		back(w, r, "/feeds", "err", err.Error())
+		back(w, r, fallback, "err", err.Error())
 		return
 	}
+	added, err := importFeeds(r.Context(), s.App.Store, p.ID, list)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	back(w, r, fallback, "msg", fmt.Sprintf("OPMLから%d件を追加しました（登録済み%d件はスキップ）", added, len(list)-added))
+}
+
+func importFeeds(ctx context.Context, st *store.Store, profileID int64, list []feeds.OPMLFeed) (int, error) {
 	added := 0
 	for _, f := range list {
 		if f.URL == "" {
 			continue
 		}
-		ok, err := s.App.Store.AddFeed(r.Context(), f.Title, f.URL, f.Category)
+		ok, err := st.AddFeed(ctx, profileID, f.Title, f.URL, f.Category)
 		if err != nil {
-			serverError(w, err)
-			return
+			return added, err
 		}
 		if ok {
 			added++
 		}
 	}
-	back(w, r, "/feeds", "msg", fmt.Sprintf("OPMLから%d件を追加しました（登録済み%d件はスキップ）", added, len(list)-added))
+	return added, nil
 }
 
-func (s *Server) exportOPML(w http.ResponseWriter, r *http.Request) {
-	list, err := s.App.Store.Feeds(r.Context())
+func (s *Server) exportOPML(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	list, err := s.App.Store.Feeds(r.Context(), p.ID)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/x-opml; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="mekiki.opml"`)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="mekiki-%s.opml"`, p.Slug))
 	if err := feeds.WriteOPML(w, list); err != nil {
 		slog.Error("OPML書き出し失敗", "err", err)
 	}
 }
 
-func (s *Server) actionUpdateFeed(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionUpdateFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/feeds"
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	title := strings.TrimSpace(r.FormValue("title"))
 	if title == "" {
-		back(w, r, "/feeds", "err", "フィード名を入力してください")
+		back(w, r, fallback, "err", "フィード名を入力してください")
 		return
 	}
-	err := s.App.Store.UpdateFeed(r.Context(), id, title,
+	err := s.App.Store.UpdateFeed(r.Context(), p.ID, id, title,
 		strings.TrimSpace(r.FormValue("category")), r.FormValue("enabled") == "1")
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	back(w, r, "/feeds", "msg", "「"+title+"」を更新しました")
+	back(w, r, fallback, "msg", "「"+title+"」を更新しました")
 }
 
-func (s *Server) actionDeleteFeed(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionDeleteFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := s.App.Store.DeleteFeed(r.Context(), id); err != nil {
+	if err := s.App.Store.DeleteFeed(r.Context(), p.ID, id); err != nil {
 		serverError(w, err)
 		return
 	}
-	back(w, r, "/feeds", "msg", "フィードを削除しました")
+	back(w, r, prefix(p)+"/feeds", "msg", "フィードを削除しました")
 }
 
-func (s *Server) actionResetFailures(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.Store.ResetFeedFailures(r.Context()); err != nil {
+func (s *Server) actionResetFailures(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	if err := s.App.Store.ResetFeedFailures(r.Context(), p.ID); err != nil {
 		serverError(w, err)
 		return
 	}
-	back(w, r, "/feeds", "msg", "全フィードの失敗カウントをリセットしました")
+	back(w, r, prefix(p)+"/feeds", "msg", "このプロファイルのフィードの失敗カウントをリセットしました")
 }
 
 // ---- ジョブ ----
 
 func (s *Server) actionFetch(w http.ResponseWriter, r *http.Request) {
 	if err := s.App.StartFetch(); err != nil {
-		back(w, r, "/articles", "err", err.Error())
-		return
-	}
-	back(w, r, "/articles", "msg", "フィードの取得を開始しました")
-}
-
-func (s *Server) actionDigest(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.StartDigest(digest.KindAppend); err != nil {
 		back(w, r, "/", "err", err.Error())
 		return
 	}
-	back(w, r, "/", "msg", "要約実行を開始しました（前回からの新着分を今日のページに追記します）")
+	back(w, r, "/", "msg", "フィードの取得を開始しました（全プロファイル）")
 }
 
-func (s *Server) actionRebuild(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.StartDigest(digest.KindRebuild); err != nil {
-		back(w, r, "/", "err", err.Error())
+func (s *Server) actionDigest(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	if err := s.App.StartDigest(p.ID, digest.KindAppend); err != nil {
+		back(w, r, prefix(p)+"/", "err", err.Error())
 		return
 	}
-	back(w, r, "/", "msg", "今日のページの再作成を開始しました")
+	back(w, r, prefix(p)+"/", "msg", "要約実行を開始しました（前回からの新着分を今日のページに追記します）")
+}
+
+func (s *Server) actionRebuild(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	if err := s.App.StartDigest(p.ID, digest.KindRebuild); err != nil {
+		back(w, r, prefix(p)+"/", "err", err.Error())
+		return
+	}
+	back(w, r, prefix(p)+"/", "msg", "今日のページの再作成を開始しました")
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -615,8 +696,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
-	list, err := s.App.Store.Runs(r.Context(), 100)
+func (s *Server) runs(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	list, err := s.App.Store.Runs(r.Context(), p.ID, 100)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -624,18 +705,150 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "runs", struct {
 		base
 		Runs []store.Run
-	}{s.base(r, "runs", "実行履歴"), list})
+	}{s.base(r, p, "runs", p.Name+" 実行履歴"), list})
 }
 
-// ---- 設定 ----
+// ---- プロファイル ----
+
+func (s *Server) profilesPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	b := s.base(r, config.Profile{}, "profiles", "プロファイル")
+	type row struct {
+		config.Profile
+		Feeds int
+		Pages int
+	}
+	var rows []row
+	for _, p := range b.Profiles {
+		fl, _ := s.App.Store.Feeds(ctx, p.ID)
+		pl, _ := s.App.Store.Pages(ctx, p.ID)
+		rows = append(rows, row{p, len(fl), len(pl)})
+	}
+	s.render(w, "profiles", struct {
+		base
+		Rows []row
+	}{b, rows})
+}
+
+func (s *Server) actionCreateProfile(w http.ResponseWriter, r *http.Request) {
+	slug := strings.ToLower(strings.TrimSpace(r.FormValue("slug")))
+	name := strings.TrimSpace(r.FormValue("name"))
+	p := config.DefaultProfile(slug, name)
+	if from := r.FormValue("copy_from"); from != "" {
+		// 既存プロファイルの設定（選定基準・興味・時刻・Discord以外）を引き継ぐ
+		if src, err := s.App.Store.ProfileBySlug(r.Context(), from); err == nil {
+			p.SelectCriteria, p.UserMemory = src.SelectCriteria, src.UserMemory
+			p.PickCount, p.HoursBack, p.Overview = src.PickCount, src.HoursBack, src.Overview
+			p.DigestTimes = src.DigestTimes
+		}
+	}
+	if err := p.Validate(); err != nil {
+		back(w, r, "/profiles", "err", err.Error())
+		return
+	}
+	if _, err := s.App.Store.CreateProfile(r.Context(), p); err != nil {
+		back(w, r, "/profiles", "err", err.Error())
+		return
+	}
+	http.Redirect(w, r, prefix(p)+"/settings?msg="+url.QueryEscape(
+		"プロファイル「"+p.Name+"」を作成しました。選定基準などを設定し、フィードを追加してください"), http.StatusSeeOther)
+}
+
+func (s *Server) profilePage(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	s.render(w, "profile", struct {
+		base
+		P           config.Profile
+		DigestTimes string
+	}{s.base(r, p, "profile", p.Name+" プロファイル設定"), p, strings.Join(p.DigestTimes, ", ")})
+}
+
+func (s *Server) actionSaveProfile(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/settings"
+	n := func(key string, def int) int {
+		v, err := strconv.Atoi(strings.TrimSpace(r.FormValue(key)))
+		if err != nil {
+			return def
+		}
+		return v
+	}
+	times, err := config.ParseTimes(r.FormValue("digest_times"))
+	if err != nil {
+		back(w, r, fallback, "err", err.Error())
+		return
+	}
+	next := p
+	next.Slug = strings.ToLower(strings.TrimSpace(r.FormValue("slug")))
+	next.Name = strings.TrimSpace(r.FormValue("name"))
+	next.SelectCriteria = strings.TrimSpace(r.FormValue("select_criteria"))
+	next.UserMemory = strings.TrimSpace(r.FormValue("user_memory"))
+	next.PickCount = n("pick_count", p.PickCount)
+	next.HoursBack = n("hours_back", p.HoursBack)
+	next.Overview = r.FormValue("overview") == "1"
+	next.DigestTimes = times
+	next.DiscordEmbeds = n("discord_embeds", p.DiscordEmbeds)
+	next.DiscordTitle = strings.TrimSpace(r.FormValue("discord_title"))
+	if c := strings.TrimPrefix(strings.TrimSpace(r.FormValue("discord_color")), "#"); c != "" {
+		if v, err := strconv.ParseInt(c, 16, 32); err == nil {
+			next.DiscordColor = int(v)
+		}
+	}
+	next.DiscordBaseURL = strings.TrimSpace(r.FormValue("discord_base_url"))
+	next.DiscordAfterFail = r.FormValue("discord_after_fail") == "1"
+	if v := strings.TrimSpace(r.FormValue("discord_webhook")); v != "" {
+		next.DiscordWebhook = v
+	}
+	if r.FormValue("discord_clear") == "1" {
+		next.DiscordWebhook = ""
+	}
+	if err := next.Validate(); err != nil {
+		back(w, r, fallback, "err", err.Error())
+		return
+	}
+	if err := s.App.Store.UpdateProfile(r.Context(), next); err != nil {
+		back(w, r, fallback, "err", err.Error())
+		return
+	}
+	http.Redirect(w, r, prefix(next)+"/settings?msg="+url.QueryEscape("プロファイル設定を保存しました"), http.StatusSeeOther)
+}
+
+func (s *Server) actionDeleteProfile(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	list, err := s.App.Store.Profiles(r.Context())
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if len(list) <= 1 {
+		back(w, r, prefix(p)+"/settings", "err", "最後のプロファイルは削除できません")
+		return
+	}
+	if r.FormValue("confirm") != p.Slug {
+		back(w, r, prefix(p)+"/settings", "err", "削除するには確認欄にプロファイルIDを入力してください")
+		return
+	}
+	if id, running := s.App.Digest.Running(); running && id == p.ID {
+		back(w, r, prefix(p)+"/settings", "err", "要約実行中のため削除できません")
+		return
+	}
+	if err := s.App.Store.DeleteProfile(r.Context(), p.ID); err != nil {
+		serverError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/profiles?msg="+url.QueryEscape("プロファイル「"+p.Name+"」を削除しました"), http.StatusSeeOther)
+}
+
+// ---- 全体設定 ----
+
+type providerView struct {
+	config.Provider
+	Model     string
+	KeySource string // 画面で設定済み / 環境変数 XXX / 未設定
+	KeyHint   string
+}
 
 type settingsData struct {
 	base
-	S            config.Settings
-	DigestTimes  string
-	KeySource    string // 画面設定 / 環境変数 / 未設定
-	KeyHint      string
-	DefaultModel string
+	S         config.Settings
+	Providers []providerView
 }
 
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
@@ -644,19 +857,20 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	d := settingsData{
-		base: s.base(r, "settings", "設定"), S: cfg,
-		DigestTimes: strings.Join(cfg.DigestTimes, ", "), DefaultModel: config.DefaultModel,
+	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg}
+	for _, p := range config.Providers {
+		v := providerView{Provider: p, Model: cfg.Models[p.ID]}
+		switch {
+		case cfg.APIKeys[p.ID] != "":
+			v.KeySource, v.KeyHint = "画面で設定済み", maskKey(cfg.APIKeys[p.ID])
+		case cfg.APIKey(p.ID) != "":
+			v.KeySource, v.KeyHint = "環境変数 "+p.KeyEnv, maskKey(cfg.APIKey(p.ID))
+		default:
+			v.KeySource = "未設定"
+		}
+		d.Providers = append(d.Providers, v)
 	}
-	switch {
-	case cfg.APIKey != "":
-		d.KeySource, d.KeyHint = "画面で設定済み", maskKey(cfg.APIKey)
-	case cfg.EffectiveAPIKey() != "":
-		d.KeySource, d.KeyHint = "環境変数 ANTHROPIC_API_KEY", maskKey(cfg.EffectiveAPIKey())
-	default:
-		d.KeySource = "未設定"
-	}
-	d.S.APIKey = ""
+	d.S.APIKeys = nil
 	s.render(w, "settings", d)
 }
 
@@ -664,7 +878,7 @@ func maskKey(k string) string {
 	if len(k) <= 8 {
 		return "****"
 	}
-	return k[:7] + "…" + k[len(k)-4:]
+	return k[:6] + "…" + k[len(k)-4:]
 }
 
 func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
@@ -680,59 +894,33 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return v
 	}
-	times, err := config.ParseTimes(r.FormValue("digest_times"))
-	if err != nil {
-		back(w, r, "/settings", "err", err.Error())
-		return
-	}
-	color := cur.DiscordColor
-	if c := strings.TrimPrefix(strings.TrimSpace(r.FormValue("discord_color")), "#"); c != "" {
-		if v, err := strconv.ParseInt(c, 16, 32); err == nil {
-			color = int(v)
-		}
-	}
 	next := cur
 	next.Backend = r.FormValue("backend")
-	next.Model = strings.TrimSpace(r.FormValue("model"))
+	next.APIKeys = map[string]string{}
+	next.Models = map[string]string{}
+	for _, p := range config.Providers {
+		next.APIKeys[p.ID] = cur.APIKeys[p.ID]
+		if v := strings.TrimSpace(r.FormValue("api_key." + p.ID)); v != "" {
+			next.APIKeys[p.ID] = v
+		}
+		if r.FormValue("api_key_clear."+p.ID) == "1" {
+			next.APIKeys[p.ID] = ""
+		}
+		next.Models[p.ID] = strings.TrimSpace(r.FormValue("model." + p.ID))
+	}
+	next.CompatURL = strings.TrimSpace(r.FormValue("compat_url"))
 	next.Effort = r.FormValue("effort")
 	next.CLIPath = strings.TrimSpace(r.FormValue("cli_path"))
 	next.CLIModel = strings.TrimSpace(r.FormValue("cli_model"))
 	next.WebFetch = r.FormValue("web_fetch") == "1"
-	next.SelectCriteria = strings.TrimSpace(r.FormValue("select_criteria"))
-	next.UserMemory = strings.TrimSpace(r.FormValue("user_memory"))
-	next.PickCount = n("pick_count", cur.PickCount)
-	next.HoursBack = n("hours_back", cur.HoursBack)
-	next.Overview = r.FormValue("overview") == "1"
 	next.Timezone = strings.TrimSpace(r.FormValue("timezone"))
 	next.FetchInterval = n("fetch_interval", cur.FetchInterval)
-	next.DigestTimes = times
 	next.ArticlesPerFeed = n("articles_per_feed", cur.ArticlesPerFeed)
 	next.MaxFailures = n("max_failures", cur.MaxFailures)
 	next.FailureRetryHours = n("failure_retry_hours", cur.FailureRetryHours)
 	next.RetentionDays = n("retention_days", cur.RetentionDays)
-	next.DiscordEmbeds = n("discord_embeds", cur.DiscordEmbeds)
-	next.DiscordTitle = strings.TrimSpace(r.FormValue("discord_title"))
-	next.DiscordColor = color
-	next.DiscordBaseURL = strings.TrimSpace(r.FormValue("discord_base_url"))
-	next.DiscordAfterFail = r.FormValue("discord_after_fail") == "1"
-	if v := strings.TrimSpace(r.FormValue("discord_webhook")); v != "" {
-		next.DiscordWebhook = v
-	}
-	if r.FormValue("discord_clear") == "1" {
-		next.DiscordWebhook = ""
-	}
-	if v := strings.TrimSpace(r.FormValue("api_key")); v != "" {
-		next.APIKey = v
-	}
-	if r.FormValue("api_key_clear") == "1" {
-		next.APIKey = ""
-	}
 	if next.CLIPath == "" {
 		next.CLIPath = "claude"
-	}
-	if next.DiscordWebhook != "" && !strings.HasPrefix(next.DiscordWebhook, "https://") {
-		back(w, r, "/settings", "err", "Discord Webhook URLは https:// で始まるURLを指定してください")
-		return
 	}
 	if err := next.Validate(); err != nil {
 		back(w, r, "/settings", "err", err.Error())
@@ -745,7 +933,7 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 	back(w, r, "/settings", "msg", "設定を保存しました")
 }
 
-// actionTestAI は保存済みの設定でClaudeに短い問い合わせをして疎通を確認する。
+// actionTestAI は保存済みの設定でAIに短い問い合わせをして疎通を確認する。
 func (s *Server) actionTestAI(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.App.Settings(r.Context())
 	if err != nil {
@@ -824,10 +1012,11 @@ func renderOverview(text string) template.HTML {
 		if line == "" {
 			continue
 		}
-		if item, ok := strings.CutPrefix(line, "- "); ok || strings.HasPrefix(line, "・") {
-			if !ok {
-				item = strings.TrimPrefix(line, "・")
-			}
+		item, ok := strings.CutPrefix(line, "- ")
+		if !ok {
+			item, ok = strings.CutPrefix(line, "・")
+		}
+		if ok {
 			if !inList {
 				b.WriteString("<ul>")
 				inList = true

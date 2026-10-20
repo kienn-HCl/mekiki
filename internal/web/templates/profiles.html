@@ -1,0 +1,30 @@
+{{define "content"}}
+<h1>プロファイル</h1>
+<p class="muted">用途ごと（技術記事・ニュースなど）にプロファイルを分けると、フィード・選定基準・興味・実行時刻・ページ・Discord投稿先をそれぞれ別に持てます。</p>
+
+<div class="cards">
+{{range .Rows}}
+  <article class="card">
+    <div class="body">
+      <h4><a href="/p/{{.Slug}}/">{{.Name}}</a> <span class="muted small">/p/{{.Slug}}</span></h4>
+      <div class="meta">フィード{{.Feeds}}件 · ページ{{.Pages}}日分 · 要約実行 {{range $i, $t := .DigestTimes}}{{if $i}}, {{end}}{{$t}}{{else}}手動のみ{{end}}{{if .DiscordWebhook}} · Discord投稿あり{{end}}</div>
+      <p class="actions"><a class="button" href="/p/{{.Slug}}/settings">設定</a> <a class="button" href="/p/{{.Slug}}/feeds">フィード</a></p>
+    </div>
+  </article>
+{{end}}
+</div>
+
+<form class="panel" method="post" action="/profiles">
+  <h2>プロファイルを追加</h2>
+  <div class="grid">
+    <label>表示名 <input name="name" required placeholder="ニュース"></label>
+    <label>ID（URLに使う。英小文字・数字・-・_）<input name="slug" required pattern="[a-z0-9][a-z0-9_\-]{0,31}" placeholder="news"></label>
+  </div>
+  <label>選定基準などの初期値
+    <select name="copy_from">
+      <option value="">既定の値</option>
+      {{range .Rows}}<option value="{{.Slug}}">「{{.Name}}」からコピー</option>{{end}}
+    </select></label>
+  <button class="primary">追加</button>
+</form>
+{{end}}

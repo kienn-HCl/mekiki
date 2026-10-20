@@ -23,32 +23,84 @@ func TestParseTimes(t *testing.T) {
 
 func TestRoundTrip(t *testing.T) {
 	s := Defaults()
-	s.DigestTimes = []string{"07:00", "19:00"}
+	s.Backend = BackendOpenRouter
+	s.APIKeys[BackendOpenRouter] = "sk-or-xxx"
+	s.Models[BackendOpenRouter] = "openai/gpt-5.1"
 	s.WebFetch = false
-	s.UserMemory = "Rustが好き"
 	got := Load(s.Map())
 	if fmt.Sprint(got) != fmt.Sprint(s) {
 		t.Errorf("round trip mismatch:\n got %+v\nwant %+v", got, s)
 	}
 	if err := got.Validate(); err != nil {
+		t.Errorf("検証を通らない: %v", err)
+	}
+	if err := Defaults().Validate(); err != nil {
 		t.Errorf("デフォルト値が検証を通らない: %v", err)
 	}
 }
 
-func TestValidate(t *testing.T) {
+func TestLegacyBackendName(t *testing.T) {
+	if got := Load(map[string]string{"backend": "api"}); got.Backend != BackendAnthropic {
+		t.Errorf("旧名 api が anthropic にならない: %q", got.Backend)
+	}
+}
+
+func TestProviderResolution(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "env-key")
 	s := Defaults()
-	s.Backend = "openai"
-	if s.Validate() == nil {
-		t.Error("不正なbackendが通る")
+	if s.Model(BackendAnthropic) != "claude-opus-5-5" {
+		t.Errorf("Anthropicの既定モデル: %q", s.Model(BackendAnthropic))
 	}
-	s = Defaults()
-	s.FetchInterval = 1
-	if s.Validate() == nil {
-		t.Error("短すぎる取得間隔が通る")
+	if s.APIKey(BackendGemini) != "env-key" {
+		t.Error("環境変数のキーが使われない")
 	}
-	s = Defaults()
-	s.Timezone = "Mars/Base"
-	if s.Validate() == nil {
-		t.Error("不正なタイムゾーンが通る")
+	s.APIKeys[BackendGemini] = "screen-key"
+	if s.APIKey(BackendGemini) != "screen-key" {
+		t.Error("画面のキーが優先されない")
+	}
+	if s.BaseURL(BackendGemini) != "https://generativelanguage.googleapis.com/v1beta/openai" {
+		t.Errorf("GeminiのURL: %q", s.BaseURL(BackendGemini))
+	}
+	s.CompatURL = "http://localhost:11434/v1/"
+	if s.BaseURL(BackendCompat) != "http://localhost:11434/v1" {
+		t.Errorf("互換URLの末尾スラッシュ: %q", s.BaseURL(BackendCompat))
+	}
+}
+
+func TestValidate(t *testing.T) {
+	bad := []func(*Settings){
+		func(s *Settings) { s.Backend = "unknown" },
+		func(s *Settings) { s.FetchInterval = 1 },
+		func(s *Settings) { s.Timezone = "Mars/Base" },
+		func(s *Settings) { s.Backend = BackendOpenAI }, // モデル未指定
+		func(s *Settings) { s.Backend = BackendCompat; s.Models[BackendCompat] = "llama"; s.CompatURL = "" },
+	}
+	for i, f := range bad {
+		s := Defaults()
+		f(&s)
+		if s.Validate() == nil {
+			t.Errorf("case %d: 不正な設定が通る", i)
+		}
+	}
+	s := Defaults()
+	s.Backend = BackendCLI
+	if err := s.Validate(); err != nil {
+		t.Errorf("CLI: %v", err)
+	}
+}
+
+func TestProfileValidate(t *testing.T) {
+	if err := DefaultProfile("tech", "技術").Validate(); err != nil {
+		t.Errorf("既定プロファイル: %v", err)
+	}
+	for _, slug := range []string{"", "Tech", "a b", "日本語", "-x"} {
+		if DefaultProfile(slug, "x").Validate() == nil {
+			t.Errorf("不正なID %q が通る", slug)
+		}
+	}
+	p := DefaultProfile("news", "ニュース")
+	p.DiscordWebhook = "http://insecure"
+	if p.Validate() == nil {
+		t.Error("httpのWebhookが通る")
 	}
 }

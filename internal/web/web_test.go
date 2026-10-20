@@ -21,6 +21,9 @@ func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	if err := st.EnsureProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	srv, err := New(app.New(st), password)
 	if err != nil {
 		t.Fatal(err)
@@ -32,20 +35,20 @@ func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
 
 func seed(t *testing.T, st *store.Store) string {
 	ctx := context.Background()
-	st.AddFeed(ctx, "Feed <A>", "https://a.example/rss", "技術")
-	feeds, _ := st.Feeds(ctx)
+	st.AddFeed(ctx, 1, "Feed <A>", "https://a.example/rss", "技術")
+	feeds, _ := st.Feeds(ctx, 1)
 	now := time.Now()
 	st.InsertArticles(ctx, []store.Article{{
 		FeedID: feeds[0].ID, Title: "記事 <script>", Link: "https://a.example/1",
 		NormLink: "https://a.example/1", FetchedAt: now, Body: "<p>本文</p>",
 	}})
 	date := now.In(config.Defaults().Location()).Format("2006-01-02")
-	runID, _ := st.StartRun(ctx, store.Run{Date: date, Kind: "append", Trigger: "manual", StartedAt: now})
-	st.AppendItems(ctx, date, []store.PageItem{{
+	runID, _ := st.StartRun(ctx, store.Run{ProfileID: 1, Date: date, Kind: "append", Trigger: "manual", StartedAt: now})
+	st.AppendItems(ctx, 1, date, []store.PageItem{{
 		RunID: runID, Title: "掲載記事", Link: "https://a.example/1", NormLink: "https://a.example/1",
 		Category: "技術", FeedName: "Feed", Summary: "要約です", SummaryOK: true, Stage: "feed",
-	}}, now)
-	st.SetOverview(ctx, date, "- まとめ1\n- まとめ2", now)
+	}}, now, false)
+	st.SetOverview(ctx, 1, date, "- まとめ1\n- まとめ2", now)
 	return date
 }
 
@@ -71,25 +74,26 @@ func get(t *testing.T, ts *httptest.Server, path string) (int, string) {
 func TestPagesRender(t *testing.T) {
 	ts, st := newServer(t, "")
 	date := seed(t, st)
-	for _, p := range []string{"/", "/day/" + date, "/day/2020-01-01", "/archive", "/articles",
-		"/articles?unread=1", "/feeds", "/settings", "/runs", "/feeds/export.opml", "/api/status",
-		"/static/style.css"} {
+	for _, p := range []string{"/", "/p/main/", "/p/main/day/" + date, "/p/main/day/2020-01-01",
+		"/p/main/archive", "/p/main/articles", "/p/main/articles?unread=1", "/p/main/feeds",
+		"/p/main/settings", "/p/main/runs", "/p/main/feeds/export.opml", "/settings", "/profiles",
+		"/api/status", "/static/style.css"} {
 		code, body := get(t, ts, p)
 		if code != http.StatusOK {
 			t.Errorf("GET %s = %d: %.300s", p, code, body)
 		}
 	}
-	_, body := get(t, ts, "/")
+	_, body := get(t, ts, "/p/main/")
 	for _, want := range []string{"掲載記事", "要約です", "<li>まとめ1</li>", "今日のページを作り直す"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("今日のページに %q がない", want)
 		}
 	}
-	_, body = get(t, ts, "/articles")
+	_, body = get(t, ts, "/p/main/articles")
 	if strings.Contains(body, "記事 <script>") {
 		t.Error("記事タイトルがエスケープされていない")
 	}
-	if code, _ := get(t, ts, "/day/not-a-date"); code != http.StatusNotFound {
+	if code, _ := get(t, ts, "/p/main/day/not-a-date"); code != http.StatusNotFound {
 		t.Errorf("不正な日付 = %d", code)
 	}
 }
@@ -113,7 +117,7 @@ func TestBasicAuth(t *testing.T) {
 
 func TestCrossOriginPostRejected(t *testing.T) {
 	ts, _ := newServer(t, "")
-	req, _ := http.NewRequest("POST", ts.URL+"/feeds/reset", nil)
+	req, _ := http.NewRequest("POST", ts.URL+"/p/main/feeds/reset", nil)
 	req.Header.Set("Origin", "https://evil.example")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -125,46 +129,110 @@ func TestCrossOriginPostRejected(t *testing.T) {
 	}
 }
 
-func TestSaveSettingsAndAddFeed(t *testing.T) {
-	ts, st := newServer(t, "")
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	form := url.Values{
-		"backend": {"cli"}, "model": {"claude-opus-5-5"}, "effort": {"low"}, "cli_path": {"claude"},
-		"select_criteria": {"- 何でも"}, "user_memory": {"Goが好き"}, "pick_count": {"7"},
-		"hours_back": {"12"}, "timezone": {"Asia/Tokyo"}, "fetch_interval": {"30"},
-		"digest_times": {"18:00, 07:30"}, "articles_per_feed": {"10"}, "max_failures": {"5"},
-		"failure_retry_hours": {"24"}, "retention_days": {"30"}, "discord_embeds": {"5"},
-		"discord_title": {"見出し"}, "discord_color": {"3498DB"}, "api_key": {"sk-ant-test-1234567890"},
-	}
-	resp, err := client.PostForm(ts.URL+"/settings", form)
+func noRedirect() *http.Client {
+	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+func post(t *testing.T, ts *httptest.Server, path string, form url.Values) string {
+	t.Helper()
+	resp, err := noRedirect().PostForm(ts.URL+path, form)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "msg=") {
+	return resp.Header.Get("Location")
+}
+
+func TestSaveGlobalSettings(t *testing.T) {
+	ts, st := newServer(t, "")
+	form := url.Values{
+		"backend": {"openrouter"}, "model.openrouter": {"openai/gpt-5.1"}, "effort": {""},
+		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"claude"},
+		"timezone": {"Asia/Tokyo"}, "fetch_interval": {"30"}, "articles_per_feed": {"10"},
+		"max_failures": {"5"}, "failure_retry_hours": {"24"}, "retention_days": {"30"},
+	}
+	if loc := post(t, ts, "/settings", form); !strings.Contains(loc, "msg=") {
 		t.Fatalf("保存に失敗: %s", loc)
 	}
 	kv, _ := st.Settings(context.Background())
 	s := config.Load(kv)
-	if s.Backend != "cli" || s.PickCount != 7 || strings.Join(s.DigestTimes, ",") != "07:30,18:00" ||
-		s.DiscordColor != 0x3498DB || s.APIKey != "sk-ant-test-1234567890" || s.WebFetch {
+	if s.Backend != "openrouter" || s.Model("openrouter") != "openai/gpt-5.1" ||
+		s.APIKeys["openrouter"] != "sk-or-test-1234567890" || s.Effort != "" || s.WebFetch {
 		t.Errorf("保存内容が違う: %+v", s)
 	}
-	// APIキーは画面に平文で出さない
+	// APIキーは画面に平文で出さない。空欄で再保存してもキーは消えない
 	_, body := get(t, ts, "/settings")
-	if strings.Contains(body, "sk-ant-test-1234567890") {
+	if strings.Contains(body, "sk-or-test-1234567890") {
 		t.Error("APIキーが設定画面に平文で出ている")
 	}
+	form.Del("api_key.openrouter")
+	post(t, ts, "/settings", form)
+	kv, _ = st.Settings(context.Background())
+	if config.Load(kv).APIKeys["openrouter"] == "" {
+		t.Error("空欄の保存でAPIキーが消えた")
+	}
+	// モデル未指定はエラー
+	form.Set("model.openrouter", "")
+	if loc := post(t, ts, "/settings", form); !strings.Contains(loc, "err=") {
+		t.Errorf("モデル未指定が通った: %s", loc)
+	}
+}
 
-	resp, err = client.PostForm(ts.URL+"/feeds/add", url.Values{
-		"url": {"https://b.example/feed"}, "title": {"B"}, "category": {"ニュース"},
+func TestProfilesFlow(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+
+	loc := post(t, ts, "/profiles", url.Values{"name": {"ニュース"}, "slug": {"news"}, "copy_from": {"main"}})
+	if !strings.HasPrefix(loc, "/p/news/settings") {
+		t.Fatalf("作成後のリダイレクト: %s", loc)
+	}
+	if loc := post(t, ts, "/profiles", url.Values{"name": {"重複"}, "slug": {"news"}}); !strings.Contains(loc, "err=") {
+		t.Errorf("重複IDが通った: %s", loc)
+	}
+
+	loc = post(t, ts, "/p/news/settings", url.Values{
+		"name": {"世界のニュース"}, "slug": {"world"}, "select_criteria": {"- 信頼できる通信社を優先"},
+		"user_memory": {"経済"}, "pick_count": {"8"}, "hours_back": {"12"}, "overview": {"1"},
+		"digest_times": {"18:00, 07:30"}, "discord_embeds": {"5"}, "discord_title": {"ニュース"},
+		"discord_color": {"3498DB"},
 	})
+	if !strings.HasPrefix(loc, "/p/world/settings") {
+		t.Fatalf("ID変更後のリダイレクト: %s", loc)
+	}
+	p, err := st.ProfileBySlug(ctx, "world")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	feeds, _ := st.Feeds(context.Background())
-	if len(feeds) != 1 || feeds[0].Title != "B" || feeds[0].Category != "ニュース" {
-		t.Errorf("フィード追加: %+v", feeds)
+	if p.Name != "世界のニュース" || p.PickCount != 8 || strings.Join(p.DigestTimes, ",") != "07:30,18:00" ||
+		p.DiscordColor != 0x3498DB || p.UserMemory != "経済" {
+		t.Errorf("保存内容が違う: %+v", p)
+	}
+
+	post(t, ts, "/p/world/feeds/add", url.Values{"url": {"https://b.example/feed"}, "title": {"B"}, "category": {"国際"}})
+	if f, _ := st.Feeds(ctx, p.ID); len(f) != 1 || f[0].Title != "B" {
+		t.Errorf("フィード追加: %+v", f)
+	}
+	if f, _ := st.Feeds(ctx, 1); len(f) != 0 {
+		t.Errorf("別プロファイルにフィードが入った: %+v", f)
+	}
+	_, body := get(t, ts, "/p/main/")
+	if !strings.Contains(body, `href="/p/world/"`) {
+		t.Error("ヘッダーにプロファイル切り替えがない")
+	}
+
+	// 削除は確認入力が必要
+	if loc := post(t, ts, "/p/world/delete", url.Values{"confirm": {"wrong"}}); !strings.Contains(loc, "err=") {
+		t.Errorf("確認なしで削除された: %s", loc)
+	}
+	post(t, ts, "/p/world/delete", url.Values{"confirm": {"world"}})
+	if _, err := st.ProfileBySlug(ctx, "world"); err == nil {
+		t.Error("削除されていない")
+	}
+	// 最後の1つは削除できない
+	if loc := post(t, ts, "/p/main/delete", url.Values{"confirm": {"main"}}); !strings.Contains(loc, "err=") {
+		t.Errorf("最後のプロファイルが削除された: %s", loc)
+	}
+	if code, _ := get(t, ts, "/p/nothing/"); code != http.StatusOK { // /profiles にリダイレクトされる
+		t.Errorf("存在しないプロファイル: %d", code)
 	}
 }

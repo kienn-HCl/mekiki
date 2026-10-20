@@ -8,11 +8,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/kienn-HCl/mekiki/internal/config"
 )
+
+// schemaVersion はスキーマの版。旧版（プロファイル導入前）のDBは自動で移行する
+const schemaVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -20,10 +26,31 @@ CREATE TABLE IF NOT EXISTS settings (
 	value TEXT NOT NULL
 );
 
+-- プロファイル（技術記事用・ニュース用など）。フィード・ページ・実行履歴はプロファイルごと
+CREATE TABLE IF NOT EXISTS profiles (
+	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	slug               TEXT NOT NULL UNIQUE,
+	name               TEXT NOT NULL,
+	position           INTEGER NOT NULL DEFAULT 0,
+	select_criteria    TEXT NOT NULL,
+	user_memory        TEXT NOT NULL DEFAULT '',
+	pick_count         INTEGER NOT NULL,
+	hours_back         INTEGER NOT NULL,
+	overview           INTEGER NOT NULL,
+	digest_times       TEXT NOT NULL DEFAULT '',
+	discord_webhook    TEXT NOT NULL DEFAULT '',
+	discord_embeds     INTEGER NOT NULL DEFAULT 5,
+	discord_title      TEXT NOT NULL DEFAULT '',
+	discord_color      INTEGER NOT NULL DEFAULT 0,
+	discord_base_url   TEXT NOT NULL DEFAULT '',
+	discord_after_fail INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS feeds (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id    INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
 	title         TEXT NOT NULL,
-	url           TEXT NOT NULL UNIQUE,
+	url           TEXT NOT NULL,
 	category      TEXT NOT NULL DEFAULT '',
 	enabled       INTEGER NOT NULL DEFAULT 1,
 	etag          TEXT NOT NULL DEFAULT '',
@@ -32,7 +59,8 @@ CREATE TABLE IF NOT EXISTS feeds (
 	last_attempt  INTEGER,
 	last_success  INTEGER,
 	last_error    TEXT NOT NULL DEFAULT '',
-	position      INTEGER NOT NULL DEFAULT 0
+	position      INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(profile_id, url)
 );
 
 CREATE TABLE IF NOT EXISTS articles (
@@ -60,16 +88,19 @@ CREATE TABLE IF NOT EXISTS considered (
 CREATE INDEX IF NOT EXISTS idx_considered_date ON considered(date);
 
 CREATE TABLE IF NOT EXISTS pages (
-	date       TEXT PRIMARY KEY,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	date       TEXT NOT NULL,
 	overview   TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(profile_id, date)
 );
 
 -- ページに載った記事。記事本体が保持期間切れで消えても残るよう、表示用の値は複製して持つ
 CREATE TABLE IF NOT EXISTS page_items (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	date       TEXT NOT NULL REFERENCES pages(date) ON DELETE CASCADE,
+	profile_id INTEGER NOT NULL,
+	date       TEXT NOT NULL,
 	run_id     INTEGER NOT NULL,
 	position   INTEGER NOT NULL,
 	title      TEXT NOT NULL,
@@ -81,26 +112,28 @@ CREATE TABLE IF NOT EXISTS page_items (
 	summary_ok INTEGER NOT NULL,
 	stage      TEXT NOT NULL,
 	image      TEXT NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL
+	created_at INTEGER NOT NULL,
+	FOREIGN KEY(profile_id, date) REFERENCES pages(profile_id, date) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_items_date ON page_items(date);
-CREATE INDEX IF NOT EXISTS idx_items_norm ON page_items(norm_link);
+CREATE INDEX IF NOT EXISTS idx_items_date ON page_items(profile_id, date);
+CREATE INDEX IF NOT EXISTS idx_items_norm ON page_items(profile_id, norm_link);
 
 CREATE TABLE IF NOT EXISTS runs (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id  INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
 	date        TEXT NOT NULL,
-	kind        TEXT NOT NULL,          -- append | rebuild
-	trigger     TEXT NOT NULL,          -- schedule | manual
+	kind        TEXT NOT NULL,            -- append | rebuild
+	trigger     TEXT NOT NULL,            -- schedule | manual
 	slot        TEXT NOT NULL DEFAULT '', -- 定時実行の枠（例 "07:00"）
 	started_at  INTEGER NOT NULL,
 	finished_at INTEGER,
-	status      TEXT NOT NULL,          -- running | ok | failed | skipped
+	status      TEXT NOT NULL,            -- running | ok | failed | skipped
 	message     TEXT NOT NULL DEFAULT '',
 	candidates  INTEGER NOT NULL DEFAULT 0,
 	picked      INTEGER NOT NULL DEFAULT 0,
 	usage       TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(date);
+CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(profile_id, date);
 `
 
 type Store struct {
@@ -117,14 +150,166 @@ func Open(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// SQLiteは書き込みが直列なので接続を絞ってロック競合を避ける
+	// SQLiteは書き込みが直列なので接続を1本に絞ってロック競合を避ける（PRAGMAも接続単位で効く）
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	s := &Store{db: db}
+	if err := s.initSchema(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("スキーマ作成に失敗: %w", err)
+		return nil, err
 	}
 	_ = os.Chmod(path, 0o600) // APIキー等を含むため
-	return &Store{db: db}, nil
+	return s, nil
+}
+
+func (s *Store) initSchema() error {
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= schemaVersion {
+		_, err := s.db.Exec(schema)
+		return err
+	}
+	var oldTables int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'feeds'`).Scan(&oldTables); err != nil {
+		return err
+	}
+	if oldTables > 0 {
+		if err := s.migrateV1(); err != nil {
+			return fmt.Errorf("旧版データベースの移行に失敗: %w", err)
+		}
+		return nil
+	}
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("スキーマ作成に失敗: %w", err)
+	}
+	_, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
+	return err
+}
+
+// migrateV1 はプロファイル導入前のDBを移行する。既存のフィード・ページ・履歴は
+// 「main」プロファイルに入れ、旧設定のうちプロファイル単位になった項目をそこへ移す。
+func (s *Store) migrateV1() error {
+	// テーブルの付け替え中に外部キーの参照先が書き換わらないよう、一時的に無効化する
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON`); err != nil {
+		return err
+	}
+	defer s.db.Exec(`PRAGMA legacy_alter_table = OFF; PRAGMA foreign_keys = ON`)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, t := range []string{"feeds", "pages", "page_items", "runs"} {
+		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME TO %s_v1`, t, t)); err != nil {
+			return err
+		}
+	}
+	for _, idx := range []string{"idx_items_date", "idx_items_norm", "idx_runs_date"} {
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + idx); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(schema); err != nil {
+		return err
+	}
+
+	kv := map[string]string{}
+	rows, err := tx.Query(`SELECT key, value FROM settings`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			rows.Close()
+			return err
+		}
+		kv[k] = v
+	}
+	rows.Close()
+	p := config.DefaultProfile("main", "メイン")
+	str := func(k string, dst *string) {
+		if v, ok := kv[k]; ok {
+			*dst = v
+		}
+	}
+	num := func(k string, dst *int) {
+		if v, err := strconv.Atoi(kv[k]); err == nil {
+			*dst = v
+		}
+	}
+	str("select_criteria", &p.SelectCriteria)
+	str("user_memory", &p.UserMemory)
+	num("pick_count", &p.PickCount)
+	num("hours_back", &p.HoursBack)
+	if v, ok := kv["overview"]; ok {
+		p.Overview = v == "1"
+	}
+	if v, ok := kv["digest_times"]; ok {
+		p.DigestTimes, _ = config.ParseTimes(v)
+	}
+	str("discord_webhook", &p.DiscordWebhook)
+	num("discord_embeds", &p.DiscordEmbeds)
+	str("discord_title", &p.DiscordTitle)
+	num("discord_color", &p.DiscordColor)
+	str("discord_base_url", &p.DiscordBaseURL)
+	if v, ok := kv["discord_after_fail"]; ok {
+		p.DiscordAfterFail = v == "1"
+	}
+	// 旧版のAPIキー・モデルはAnthropic経路のものだった
+	if v := kv["api_key"]; v != "" {
+		kv["api_key."+config.BackendAnthropic] = v
+	}
+	if v := kv["model"]; v != "" {
+		kv["model."+config.BackendAnthropic] = v
+	}
+	if kv["backend"] == "api" {
+		kv["backend"] = config.BackendAnthropic
+	}
+	for _, k := range []string{"api_key.anthropic", "model.anthropic", "backend"} {
+		if _, err := tx.Exec(`INSERT INTO settings(key, value) VALUES(?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, kv[k]); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key IN ('api_key', 'model', 'select_criteria',
+		'user_memory', 'pick_count', 'hours_back', 'overview', 'digest_times', 'discord_webhook',
+		'discord_embeds', 'discord_title', 'discord_color', 'discord_base_url', 'discord_after_fail')`); err != nil {
+		return err
+	}
+	if _, err := insertProfile(tx, p); err != nil {
+		return err
+	}
+
+	for _, q := range []string{
+		`INSERT INTO feeds(id, profile_id, title, url, category, enabled, etag, last_modified, failures,
+		                   last_attempt, last_success, last_error, position)
+		 SELECT id, 1, title, url, category, enabled, etag, last_modified, failures,
+		        last_attempt, last_success, last_error, position FROM feeds_v1`,
+		`INSERT INTO pages(profile_id, date, overview, created_at, updated_at)
+		 SELECT 1, date, overview, created_at, updated_at FROM pages_v1`,
+		`INSERT INTO page_items(id, profile_id, date, run_id, position, title, link, norm_link, category,
+		                        feed_name, summary, summary_ok, stage, image, created_at)
+		 SELECT id, 1, date, run_id, position, title, link, norm_link, category,
+		        feed_name, summary, summary_ok, stage, image, created_at FROM page_items_v1`,
+		`INSERT INTO runs(id, profile_id, date, kind, trigger, slot, started_at, finished_at, status,
+		                  message, candidates, picked, usage)
+		 SELECT id, 1, date, kind, trigger, slot, started_at, finished_at, status,
+		        message, candidates, picked, usage FROM runs_v1`,
+		`DROP TABLE page_items_v1`,
+		`DROP TABLE pages_v1`,
+		`DROP TABLE runs_v1`,
+		`DROP TABLE feeds_v1`,
+		fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion),
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -145,7 +330,7 @@ func nullUnix(t time.Time) any {
 	return t.Unix()
 }
 
-// ---- settings ----
+// ---- settings（サーバ全体） ----
 
 func (s *Store) Settings(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
@@ -180,10 +365,127 @@ func (s *Store) SetSettings(ctx context.Context, kv map[string]string) error {
 	return tx.Commit()
 }
 
+// ---- profiles ----
+
+var ErrNotFound = errors.New("見つかりません")
+
+const profileCols = `id, slug, name, position, select_criteria, user_memory, pick_count, hours_back,
+	overview, digest_times, discord_webhook, discord_embeds, discord_title, discord_color,
+	discord_base_url, discord_after_fail`
+
+type scanner interface{ Scan(...any) error }
+
+func scanProfile(r scanner) (config.Profile, error) {
+	var p config.Profile
+	var times string
+	err := r.Scan(&p.ID, &p.Slug, &p.Name, &p.Position, &p.SelectCriteria, &p.UserMemory,
+		&p.PickCount, &p.HoursBack, &p.Overview, &times, &p.DiscordWebhook, &p.DiscordEmbeds,
+		&p.DiscordTitle, &p.DiscordColor, &p.DiscordBaseURL, &p.DiscordAfterFail)
+	if err != nil {
+		return p, err
+	}
+	p.DigestTimes, _ = config.ParseTimes(times)
+	return p, nil
+}
+
+func (s *Store) Profiles(ctx context.Context) ([]config.Profile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+profileCols+` FROM profiles ORDER BY position, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []config.Profile
+	for rows.Next() {
+		p, err := scanProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Profile(ctx context.Context, id int64) (config.Profile, error) {
+	p, err := scanProfile(s.db.QueryRowContext(ctx, `SELECT `+profileCols+` FROM profiles WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	return p, err
+}
+
+func (s *Store) ProfileBySlug(ctx context.Context, slug string) (config.Profile, error) {
+	p, err := scanProfile(s.db.QueryRowContext(ctx, `SELECT `+profileCols+` FROM profiles WHERE slug = ?`, slug))
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	return p, err
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func insertProfile(db execer, p config.Profile) (int64, error) {
+	res, err := db.Exec(`
+		INSERT INTO profiles(slug, name, position, select_criteria, user_memory, pick_count, hours_back,
+		                     overview, digest_times, discord_webhook, discord_embeds, discord_title,
+		                     discord_color, discord_base_url, discord_after_fail)
+		VALUES(?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM profiles), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Slug, p.Name, p.SelectCriteria, p.UserMemory, p.PickCount, p.HoursBack, p.Overview,
+		strings.Join(p.DigestTimes, ","), p.DiscordWebhook, p.DiscordEmbeds, p.DiscordTitle,
+		p.DiscordColor, p.DiscordBaseURL, p.DiscordAfterFail)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return 0, fmt.Errorf("プロファイルID %q は使われています", p.Slug)
+		}
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) CreateProfile(ctx context.Context, p config.Profile) (int64, error) {
+	return insertProfile(s.db, p)
+}
+
+func (s *Store) UpdateProfile(ctx context.Context, p config.Profile) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE profiles SET slug = ?, name = ?, select_criteria = ?, user_memory = ?, pick_count = ?,
+		       hours_back = ?, overview = ?, digest_times = ?, discord_webhook = ?, discord_embeds = ?,
+		       discord_title = ?, discord_color = ?, discord_base_url = ?, discord_after_fail = ?
+		WHERE id = ?`,
+		p.Slug, p.Name, p.SelectCriteria, p.UserMemory, p.PickCount, p.HoursBack, p.Overview,
+		strings.Join(p.DigestTimes, ","), p.DiscordWebhook, p.DiscordEmbeds, p.DiscordTitle,
+		p.DiscordColor, p.DiscordBaseURL, p.DiscordAfterFail, p.ID)
+	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		return fmt.Errorf("プロファイルID %q は使われています", p.Slug)
+	}
+	return err
+}
+
+// DeleteProfile はプロファイルとそのフィード・記事・ページ・履歴をすべて消す。
+func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
+	return err
+}
+
+// EnsureProfile はプロファイルが1つもなければ既定のものを作る。
+func (s *Store) EnsureProfile(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM profiles`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := s.CreateProfile(ctx, config.DefaultProfile("main", "メイン"))
+	return err
+}
+
 // ---- feeds ----
 
 type Feed struct {
 	ID           int64
+	ProfileID    int64
 	Title        string
 	URL          string
 	Category     string
@@ -198,13 +500,15 @@ type Feed struct {
 	UnreadCount  int
 }
 
-func (s *Store) Feeds(ctx context.Context) ([]Feed, error) {
+// Feeds はフィード一覧。profileID が0なら全プロファイル。
+func (s *Store) Feeds(ctx context.Context, profileID int64) ([]Feed, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.id, f.title, f.url, f.category, f.enabled, f.etag, f.last_modified,
+		SELECT f.id, f.profile_id, f.title, f.url, f.category, f.enabled, f.etag, f.last_modified,
 		       f.failures, f.last_attempt, f.last_success, f.last_error,
 		       (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id),
 		       (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read = 0)
-		FROM feeds f ORDER BY f.category, f.position, f.id`)
+		FROM feeds f WHERE (? = 0 OR f.profile_id = ?)
+		ORDER BY f.category, f.position, f.id`, profileID, profileID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +517,7 @@ func (s *Store) Feeds(ctx context.Context) ([]Feed, error) {
 	for rows.Next() {
 		var f Feed
 		var la, ls sql.NullInt64
-		if err := rows.Scan(&f.ID, &f.Title, &f.URL, &f.Category, &f.Enabled, &f.ETag,
+		if err := rows.Scan(&f.ID, &f.ProfileID, &f.Title, &f.URL, &f.Category, &f.Enabled, &f.ETag,
 			&f.LastModified, &f.Failures, &la, &ls, &f.LastError,
 			&f.ArticleCount, &f.UnreadCount); err != nil {
 			return nil, err
@@ -224,12 +528,12 @@ func (s *Store) Feeds(ctx context.Context) ([]Feed, error) {
 	return out, rows.Err()
 }
 
-// AddFeed はフィードを登録する。同じURLが既にあれば何もしない（false を返す）。
-func (s *Store) AddFeed(ctx context.Context, title, url, category string) (bool, error) {
+// AddFeed はフィードを登録する。プロファイル内に同じURLが既にあれば何もしない（false を返す）。
+func (s *Store) AddFeed(ctx context.Context, profileID int64, title, url, category string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO feeds(title, url, category, position)
-		VALUES(?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM feeds))
-		ON CONFLICT(url) DO NOTHING`, title, url, category)
+		INSERT INTO feeds(profile_id, title, url, category, position)
+		VALUES(?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM feeds))
+		ON CONFLICT(profile_id, url) DO NOTHING`, profileID, title, url, category)
 	if err != nil {
 		return false, err
 	}
@@ -237,20 +541,21 @@ func (s *Store) AddFeed(ctx context.Context, title, url, category string) (bool,
 	return n > 0, nil
 }
 
-func (s *Store) UpdateFeed(ctx context.Context, id int64, title, category string, enabled bool) error {
+func (s *Store) UpdateFeed(ctx context.Context, profileID, id int64, title, category string, enabled bool) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE feeds SET title = ?, category = ?, enabled = ? WHERE id = ?`,
-		title, category, enabled, id)
+		`UPDATE feeds SET title = ?, category = ?, enabled = ? WHERE id = ? AND profile_id = ?`,
+		title, category, enabled, id, profileID)
 	return err
 }
 
-func (s *Store) DeleteFeed(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM feeds WHERE id = ?`, id)
+func (s *Store) DeleteFeed(ctx context.Context, profileID, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM feeds WHERE id = ? AND profile_id = ?`, id, profileID)
 	return err
 }
 
-func (s *Store) ResetFeedFailures(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE feeds SET failures = 0`)
+func (s *Store) ResetFeedFailures(ctx context.Context, profileID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE feeds SET failures = 0 WHERE (? = 0 OR profile_id = ?)`, profileID, profileID)
 	return err
 }
 
@@ -341,6 +646,7 @@ func scanArticles(rows *sql.Rows) ([]Article, error) {
 }
 
 type ArticleFilter struct {
+	ProfileID  int64
 	FeedID     int64
 	Category   string
 	UnreadOnly bool
@@ -350,8 +656,8 @@ type ArticleFilter struct {
 
 // Articles はRSSリーダー画面用の記事一覧（新しい順）。
 func (s *Store) Articles(ctx context.Context, f ArticleFilter) ([]Article, error) {
-	var where []string
-	var args []any
+	where := []string{"f.profile_id = ?"}
+	args := []any{f.ProfileID}
 	if f.FeedID > 0 {
 		where = append(where, "a.feed_id = ?")
 		args = append(args, f.FeedID)
@@ -363,11 +669,9 @@ func (s *Store) Articles(ctx context.Context, f ArticleFilter) ([]Article, error
 	if f.UnreadOnly {
 		where = append(where, "a.read = 0")
 	}
-	q := `SELECT ` + articleCols + ` FROM articles a JOIN feeds f ON f.id = a.feed_id`
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
-	}
-	q += ` ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ? OFFSET ?`
+	q := `SELECT ` + articleCols + ` FROM articles a JOIN feeds f ON f.id = a.feed_id
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ? OFFSET ?`
 	args = append(args, f.Limit, f.Offset)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -387,7 +691,7 @@ func (s *Store) Article(ctx context.Context, id int64) (Article, error) {
 		return Article{}, err
 	}
 	if len(list) == 0 {
-		return Article{}, sql.ErrNoRows
+		return Article{}, ErrNotFound
 	}
 	return list[0], nil
 }
@@ -397,44 +701,46 @@ func (s *Store) MarkRead(ctx context.Context, id int64) error {
 	return err
 }
 
-func (s *Store) MarkAllRead(ctx context.Context, feedID int64) error {
-	if feedID > 0 {
-		_, err := s.db.ExecContext(ctx, `UPDATE articles SET read = 1 WHERE feed_id = ?`, feedID)
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `UPDATE articles SET read = 1`)
+// MarkAllRead はプロファイルの記事（feedID>0ならそのフィードの記事）をすべて既読にする。
+func (s *Store) MarkAllRead(ctx context.Context, profileID, feedID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE articles SET read = 1
+		WHERE feed_id IN (SELECT id FROM feeds WHERE profile_id = ? AND (? = 0 OR id = ?))`,
+		profileID, feedID, feedID)
 	return err
 }
 
 // Candidates は要約実行の候補（＝前回までの実行で選定に渡していない記事）を返す。
+//   - プロファイルの有効なフィードのもの
 //   - 公開日時が since 以降（公開日時が不明な記事は取得日時で判定）
-//   - 有効なフィードのもの
 //   - まだ選定に渡していない（considered にない）
-//   - 過去のページに載っていない（正規化URLで判定）
+//   - そのプロファイルの過去のページに載っていない（正規化URLで判定）
 //
 // ignoreDate を指定すると、その日の選定済み印・掲載分は無いものとして扱う（ページ再作成用）。
 // 並びはカテゴリ・フィードの登録順→新しい順。
-func (s *Store) Candidates(ctx context.Context, since time.Time, ignoreDate string) ([]Article, error) {
+func (s *Store) Candidates(ctx context.Context, profileID int64, since time.Time, ignoreDate string) ([]Article, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+articleCols+`
 		FROM articles a JOIN feeds f ON f.id = a.feed_id
-		WHERE f.enabled = 1
+		WHERE f.profile_id = ? AND f.enabled = 1
 		  AND COALESCE(a.published_at, a.fetched_at) >= ?
 		  AND a.fetched_at >= ?
 		  AND NOT EXISTS (SELECT 1 FROM considered c WHERE c.article_id = a.id AND c.date != ?)
-		  AND NOT EXISTS (SELECT 1 FROM page_items p WHERE p.norm_link = a.norm_link AND p.date != ?)
+		  AND NOT EXISTS (SELECT 1 FROM page_items p
+		                  WHERE p.profile_id = f.profile_id AND p.norm_link = a.norm_link AND p.date != ?)
 		ORDER BY f.category, f.position, f.id, COALESCE(a.published_at, a.fetched_at) DESC`,
-		unix(since), unix(since), ignoreDate, ignoreDate)
+		profileID, unix(since), unix(since), ignoreDate, ignoreDate)
 	if err != nil {
 		return nil, err
 	}
 	return scanArticles(rows)
 }
 
-// RecentPageTitles は直近のページに載った記事タイトル（タイトル一致dedup用）。
-func (s *Store) RecentPageTitles(ctx context.Context, since time.Time, ignoreDate string) (map[string]bool, error) {
+// RecentPageTitles はプロファイルの直近のページに載った記事タイトル（タイトル一致dedup用）。
+func (s *Store) RecentPageTitles(ctx context.Context, profileID int64, since time.Time, ignoreDate string) (map[string]bool, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT title FROM page_items WHERE created_at >= ? AND date != ?`, unix(since), ignoreDate)
+		`SELECT title FROM page_items WHERE profile_id = ? AND created_at >= ? AND date != ?`,
+		profileID, unix(since), ignoreDate)
 	if err != nil {
 		return nil, err
 	}
@@ -483,6 +789,7 @@ func (s *Store) PruneArticles(ctx context.Context, before time.Time) (int64, err
 // ---- pages ----
 
 type Page struct {
+	ProfileID int64
 	Date      string
 	Overview  string
 	CreatedAt time.Time
@@ -507,62 +814,64 @@ type PageItem struct {
 	CreatedAt time.Time
 }
 
-func (s *Store) Page(ctx context.Context, date string) (Page, bool, error) {
+const pageCols = `profile_id, date, overview, created_at, updated_at,
+	(SELECT COUNT(*) FROM page_items i WHERE i.profile_id = pages.profile_id AND i.date = pages.date)`
+
+func scanPage(r scanner) (Page, error) {
 	var p Page
 	var c, u int64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT date, overview, created_at, updated_at,
-		       (SELECT COUNT(*) FROM page_items i WHERE i.date = pages.date)
-		FROM pages WHERE date = ?`, date).Scan(&p.Date, &p.Overview, &c, &u, &p.ItemCount)
+	err := r.Scan(&p.ProfileID, &p.Date, &p.Overview, &c, &u, &p.ItemCount)
+	p.CreatedAt, p.UpdatedAt = time.Unix(c, 0), time.Unix(u, 0)
+	return p, err
+}
+
+func (s *Store) Page(ctx context.Context, profileID int64, date string) (Page, bool, error) {
+	p, err := scanPage(s.db.QueryRowContext(ctx,
+		`SELECT `+pageCols+` FROM pages WHERE profile_id = ? AND date = ?`, profileID, date))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Page{}, false, nil
 	}
 	if err != nil {
 		return Page{}, false, err
 	}
-	p.CreatedAt, p.UpdatedAt = time.Unix(c, 0), time.Unix(u, 0)
 	return p, true, nil
 }
 
-func (s *Store) Pages(ctx context.Context) ([]Page, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT date, overview, created_at, updated_at,
-		       (SELECT COUNT(*) FROM page_items i WHERE i.date = pages.date)
-		FROM pages ORDER BY date DESC`)
+func (s *Store) Pages(ctx context.Context, profileID int64) ([]Page, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+pageCols+` FROM pages WHERE profile_id = ? ORDER BY date DESC`, profileID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Page
 	for rows.Next() {
-		var p Page
-		var c, u int64
-		if err := rows.Scan(&p.Date, &p.Overview, &c, &u, &p.ItemCount); err != nil {
+		p, err := scanPage(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.CreatedAt, p.UpdatedAt = time.Unix(c, 0), time.Unix(u, 0)
 		out = append(out, p)
 	}
 	return out, rows.Err()
 }
 
 // AdjacentDates はdateの前後にあるページの日付を返す（なければ空文字列）。
-func (s *Store) AdjacentDates(ctx context.Context, date string) (prev, next string, err error) {
+func (s *Store) AdjacentDates(ctx context.Context, profileID int64, date string) (prev, next string, err error) {
 	err = s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(date), '') FROM pages WHERE date < ?`, date).Scan(&prev)
+		`SELECT COALESCE(MAX(date), '') FROM pages WHERE profile_id = ? AND date < ?`, profileID, date).Scan(&prev)
 	if err != nil {
 		return
 	}
 	err = s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MIN(date), '') FROM pages WHERE date > ?`, date).Scan(&next)
+		`SELECT COALESCE(MIN(date), '') FROM pages WHERE profile_id = ? AND date > ?`, profileID, date).Scan(&next)
 	return
 }
 
-func (s *Store) PageItems(ctx context.Context, date string) ([]PageItem, error) {
+func (s *Store) PageItems(ctx context.Context, profileID int64, date string) ([]PageItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, date, run_id, position, title, link, norm_link, category, feed_name,
 		       summary, summary_ok, stage, image, created_at
-		FROM page_items WHERE date = ? ORDER BY run_id DESC, position`, date)
+		FROM page_items WHERE profile_id = ? AND date = ? ORDER BY run_id DESC, position`, profileID, date)
 	if err != nil {
 		return nil, err
 	}
@@ -582,29 +891,38 @@ func (s *Store) PageItems(ctx context.Context, date string) ([]PageItem, error) 
 	return out, rows.Err()
 }
 
-// AppendItems はページ（なければ作成）に記事を追記する。
-func (s *Store) AppendItems(ctx context.Context, date string, items []PageItem, now time.Time) error {
+// AppendItems はページ（なければ作成）に記事を追記する。replace なら先にその日のページを消して置き換える
+// （再作成用。削除と追加を1トランザクションで行い、途中で失敗しても元のページが残るようにする）。
+func (s *Store) AppendItems(ctx context.Context, profileID int64, date string, items []PageItem, now time.Time, replace bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if replace {
+		if err := clearPage(ctx, tx, profileID, date); err != nil {
+			return err
+		}
+	}
+	if len(items) == 0 {
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO pages(date, created_at, updated_at) VALUES(?, ?, ?)
-		ON CONFLICT(date) DO UPDATE SET updated_at = excluded.updated_at`,
-		date, unix(now), unix(now)); err != nil {
+		INSERT INTO pages(profile_id, date, created_at, updated_at) VALUES(?, ?, ?, ?)
+		ON CONFLICT(profile_id, date) DO UPDATE SET updated_at = excluded.updated_at`,
+		profileID, date, unix(now), unix(now)); err != nil {
 		return err
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO page_items(date, run_id, position, title, link, norm_link, category,
+		INSERT INTO page_items(profile_id, date, run_id, position, title, link, norm_link, category,
 		                       feed_name, summary, summary_ok, stage, image, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, it := range items {
-		if _, err := stmt.ExecContext(ctx, date, it.RunID, it.Position, it.Title, it.Link,
+		if _, err := stmt.ExecContext(ctx, profileID, date, it.RunID, it.Position, it.Title, it.Link,
 			it.NormLink, it.Category, it.FeedName, it.Summary, it.SummaryOK, it.Stage,
 			it.Image, unix(now)); err != nil {
 			return err
@@ -613,36 +931,35 @@ func (s *Store) AppendItems(ctx context.Context, date string, items []PageItem, 
 	return tx.Commit()
 }
 
-func (s *Store) SetOverview(ctx context.Context, date, overview string, now time.Time) error {
+func (s *Store) SetOverview(ctx context.Context, profileID int64, date, overview string, now time.Time) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE pages SET overview = ?, updated_at = ? WHERE date = ?`, overview, unix(now), date)
+		`UPDATE pages SET overview = ?, updated_at = ? WHERE profile_id = ? AND date = ?`,
+		overview, unix(now), profileID, date)
 	return err
 }
 
-// ClearPage はその日のページを消し、その日に選定へ渡した記事の「選定済み」印も外す
+// clearPage はその日のページを消し、その日に選定へ渡した記事の「選定済み」印も外す
 // （再作成時に同じ記事を再び候補にできるようにするため）。
-func (s *Store) ClearPage(ctx context.Context, date string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+func clearPage(ctx context.Context, tx *sql.Tx, profileID int64, date string) error {
 	for _, q := range []string{
-		`DELETE FROM page_items WHERE date = ?`,
-		`DELETE FROM pages WHERE date = ?`,
-		`DELETE FROM considered WHERE date = ?`,
+		`DELETE FROM page_items WHERE profile_id = ? AND date = ?`,
+		`DELETE FROM pages WHERE profile_id = ? AND date = ?`,
+		`DELETE FROM considered WHERE article_id IN (
+			SELECT a.id FROM articles a JOIN feeds f ON f.id = a.feed_id WHERE f.profile_id = ?
+		) AND date = ?`,
 	} {
-		if _, err := tx.ExecContext(ctx, q, date); err != nil {
+		if _, err := tx.ExecContext(ctx, q, profileID, date); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // ---- runs ----
 
 type Run struct {
 	ID         int64
+	ProfileID  int64
 	Date       string
 	Kind       string
 	Trigger    string
@@ -658,8 +975,9 @@ type Run struct {
 
 func (s *Store) StartRun(ctx context.Context, r Run) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs(date, kind, trigger, slot, started_at, status)
-		VALUES(?, ?, ?, ?, ?, 'running')`, r.Date, r.Kind, r.Trigger, r.Slot, unix(r.StartedAt))
+		INSERT INTO runs(profile_id, date, kind, trigger, slot, started_at, status)
+		VALUES(?, ?, ?, ?, ?, ?, 'running')`,
+		r.ProfileID, r.Date, r.Kind, r.Trigger, r.Slot, unix(r.StartedAt))
 	if err != nil {
 		return 0, err
 	}
@@ -687,8 +1005,8 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 	for rows.Next() {
 		var r Run
 		var st, fin sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.Date, &r.Kind, &r.Trigger, &r.Slot, &st, &fin, &r.Status,
-			&r.Message, &r.Candidates, &r.Picked, &r.Usage); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProfileID, &r.Date, &r.Kind, &r.Trigger, &r.Slot, &st, &fin,
+			&r.Status, &r.Message, &r.Candidates, &r.Picked, &r.Usage); err != nil {
 			return nil, err
 		}
 		r.StartedAt, r.FinishedAt = fromUnix(st), fromUnix(fin)
@@ -697,32 +1015,32 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 	return out, rows.Err()
 }
 
-const runCols = `id, date, kind, trigger, slot, started_at, finished_at, status, message,
+const runCols = `id, profile_id, date, kind, trigger, slot, started_at, finished_at, status, message,
 	candidates, picked, usage`
 
-func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
+func (s *Store) Runs(ctx context.Context, profileID int64, limit int) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+runCols+` FROM runs ORDER BY id DESC LIMIT ?`, limit)
+		`SELECT `+runCols+` FROM runs WHERE profile_id = ? ORDER BY id DESC LIMIT ?`, profileID, limit)
 	if err != nil {
 		return nil, err
 	}
 	return scanRuns(rows)
 }
 
-func (s *Store) RunsOn(ctx context.Context, date string) ([]Run, error) {
+func (s *Store) RunsOn(ctx context.Context, profileID int64, date string) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+runCols+` FROM runs WHERE date = ? ORDER BY id DESC`, date)
+		`SELECT `+runCols+` FROM runs WHERE profile_id = ? AND date = ? ORDER BY id DESC`, profileID, date)
 	if err != nil {
 		return nil, err
 	}
 	return scanRuns(rows)
 }
 
-// SlotDone はその日・その定時枠の実行が既に行われたか。
-func (s *Store) SlotDone(ctx context.Context, date, slot string) (bool, error) {
+// SlotDone はそのプロファイル・その日・その定時枠の実行が既に行われたか。
+func (s *Store) SlotDone(ctx context.Context, profileID int64, date, slot string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM runs WHERE date = ? AND slot = ? AND trigger = 'schedule'`,
-		date, slot).Scan(&n)
+		`SELECT COUNT(*) FROM runs WHERE profile_id = ? AND date = ? AND slot = ? AND trigger = 'schedule'`,
+		profileID, date, slot).Scan(&n)
 	return n > 0, err
 }

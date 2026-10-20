@@ -1,12 +1,12 @@
 {{define "content"}}
-<h1>実行履歴</h1>
-<p class="muted">要約実行（定時・手動）の直近100件。フィード取得の結果は <a href="/articles">RSS</a> 画面に表示されます。</p>
+<h1>{{.Profile.Name}} 実行履歴</h1>
+<p class="muted">要約実行（定時・手動）の直近100件。フィード取得の結果は <a href="{{.Prefix}}/articles">RSS</a> 画面に表示されます。</p>
 <table class="runs">
   <tr><th>開始</th><th>ページ</th><th>種別</th><th>結果</th><th>候補</th><th>選定</th><th>内容 / 使用量</th></tr>
   {{range .Runs}}
   <tr>
     <td>{{fmtTime .StartedAt}}</td>
-    <td><a href="{{if eq .Date $.Today}}/{{else}}/day/{{.Date}}{{end}}">{{.Date}}</a></td>
+    <td><a href="{{$.Prefix}}/{{if ne .Date $.Today}}day/{{.Date}}{{end}}">{{.Date}}</a></td>
     <td>{{kindLabel .Kind}} / {{triggerLabel .Trigger}}{{if .Slot}} {{.Slot}}{{end}}</td>
     <td><span class="st {{.Status}}">{{.Status}}</span></td>
     <td>{{.Candidates}}</td><td>{{.Picked}}</td>
