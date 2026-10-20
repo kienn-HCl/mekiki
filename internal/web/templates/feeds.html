@@ -1,0 +1,52 @@
+{{define "content"}}
+<h1>フィード管理 <span class="muted">{{.Count}}件</span></h1>
+
+<div class="panels">
+  <form class="panel" method="post" action="/feeds/add">
+    <h2>フィードを追加</h2>
+    <label>フィードURL（RSS/Atom）<input name="url" type="url" required placeholder="https://example.com/feed"></label>
+    <label>フィード名（空ならフィードから取得）<input name="title"></label>
+    <label>カテゴリ<input name="category" list="cats"></label>
+    <datalist id="cats">{{range .Categories}}<option value="{{.}}">{{end}}</datalist>
+    <button class="primary">追加</button>
+  </form>
+  <form class="panel" method="post" action="/feeds/import" enctype="multipart/form-data">
+    <h2>OPML</h2>
+    <label>OPMLファイルから一括登録<input name="opml" type="file" accept=".opml,.xml,text/xml" required></label>
+    <p class="muted small">第1階層のoutlineをカテゴリ、その子をフィードとして読みます。登録済みのURLはスキップします。</p>
+    <button>インポート</button>
+    <p><a href="/feeds/export.opml">OPMLをエクスポート</a></p>
+  </form>
+</div>
+
+<form method="post" action="/feeds/reset" class="inline">
+  <button>失敗カウントをリセット</button>
+  <span class="muted small">連続{{.MaxFailures}}回失敗したフィードはスキップされます（設定の間隔で自動再試行）</span>
+</form>
+
+{{range .Groups}}
+<h2 class="cathead">{{if .Category}}{{.Category}}{{else}}（カテゴリなし）{{end}}</h2>
+<div class="feedtable">
+  {{range .Feeds}}
+  <div class="feedrow{{if not .Enabled}} disabled{{end}}">
+    <form method="post" action="/feeds/{{.ID}}/update" class="feededit">
+      <input name="title" value="{{.Title}}" aria-label="フィード名">
+      <input name="category" value="{{.Category}}" list="cats" aria-label="カテゴリ">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {{if .Enabled}}checked{{end}}>有効</label>
+      <button>保存</button>
+    </form>
+    <div class="feedinfo">
+      <a href="{{.URL}}" target="_blank" rel="noopener noreferrer" class="url">{{.URL}}</a>
+      <span>記事{{.ArticleCount}}件 · 最終成功 {{ago .LastSuccess}}</span>
+      {{if .Failures}}<span class="warn">連続失敗{{.Failures}}回: {{.LastError}}</span>{{end}}
+    </div>
+    <form method="post" action="/feeds/{{.ID}}/delete" onsubmit="return confirm('「{{.Title}}」を削除しますか？（取得済みの記事も消えます）')">
+      <button class="danger small">削除</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<p class="muted">フィードが登録されていません。上のフォームから追加するか、OPMLをインポートしてください。</p>
+{{end}}
+{{end}}

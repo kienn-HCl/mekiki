@@ -1,11 +1,7 @@
-__pycache__/
-*.pyc
-.cache/
-.pytest_cache/
+/mekiki
+/data/
 result
+result-*
 env
-user_memory.txt
 feeds/*.opml
 !feeds/example.opml
-*.test
-*.test.lock

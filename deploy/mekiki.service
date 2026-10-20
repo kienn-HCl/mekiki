@@ -1,0 +1,30 @@
+[Unit]
+Description=mekiki - RSSをClaudeが目利きして要約するWebアプリ
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ユーザーは事前に作成: sudo useradd -r -m -d /var/lib/mekiki -s /usr/sbin/nologin mekiki
+# claude -p 経路を使う場合は、このユーザーで claude にログインしておく
+#   sudo -u mekiki -H claude   （認証情報は /var/lib/mekiki/.claude に保存される）
+User=mekiki
+Group=mekiki
+WorkingDirectory=/var/lib/mekiki
+ExecStart=/usr/local/bin/mekiki serve -addr :8080 -data /var/lib/mekiki
+# 認証情報は `systemctl edit mekiki` で上書きファイルに書くか、EnvironmentFile で渡す
+Environment=MEKIKI_PASSWORD=change-me
+# EnvironmentFile=-/etc/mekiki/env
+Restart=on-failure
+RestartSec=5
+
+StateDirectory=mekiki
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mekiki
+Environment=HOME=/var/lib/mekiki
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

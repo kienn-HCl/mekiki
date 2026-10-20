@@ -1,80 +1,106 @@
 # mekiki
 
-RSS/Atomフィードから注目記事をClaudeに選ばせて、日本語の要約付きでDiscordに投稿するbot。
-cronでの定期実行を想定している。
+RSS/Atomフィードを集め、Claudeが注目記事を選んで日本語で要約した「今日のページ」を作るWebアプリ。
+サーバで常駐させ、ブラウザから見る。
 
-1回の実行の流れ:
+- **今日のページ（メイン）**: 設定した時刻（1日に複数回でもよい）に、前回の実行以降に増えた記事からClaudeが
+  注目記事を選び、要約して今日のページに追記する。日付ごとにページが保存され、アーカイブから過去の日を辿れる。
+  ページの先頭にはその日の「今日のまとめ」も付く。ボタンで手動実行・今日のページの作り直しもできる
+- **RSSリーダー（サブ）**: 取得した記事をフィード・カテゴリ別に一覧できる。取得は定期実行＋「今すぐ取得」ボタン
+- **AI連携**: Anthropic API（デフォルト）か `claude -p`（Claude Code CLI。サブスクリプション枠）を選べる
+- **Discord投稿（任意）**: Webhook URLを設定すると、追加された記事をDiscordにも投稿する
+- 設定・フィード管理はすべてWeb画面で行う。単一の静的リンクバイナリで、データはSQLiteファイル1つ
 
-1. OPMLに登録したフィードから最近の記事を集める
-2. 記事タイトルの一覧をClaude（Claude Code CLI）に渡し、注目記事を選ばせる
-3. 選ばれた記事ごとに本文を取得し、日本語2〜3文の要約を生成する
-4. タイトル・リンク・要約・記事画像をembedにしてDiscord Webhookへ投稿する
+## セットアップ
 
-1つのコードベースを「プロファイル」（TOML）で切り替えて、用途の異なる複数のbot（技術記事用・ニュース用など）として動かせる。
+### 1. ビルド
 
-## 必要なもの
+Go 1.26以上:
 
-- Nix（flakes有効）。Python・feedparser・claude-code はflakeが提供する
-- Claude Code CLIのログイン済み認証（サブスクリプション枠で動く。APIキー不要）
-- 投稿先DiscordチャンネルのWebhook URL
+```sh
+CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki
+```
 
-## 用意するファイル
+またはNix:
 
-以下はリポジトリに含まれない（個人データのためgit管理外）。実行前に自分で用意する:
+```sh
+nix build                 # → result/bin/mekiki（テストも実行される）
+nix build .#with-claude   # claude -p 経路を使う場合。PATHにclaude-codeを含めたラッパー
+```
 
-| ファイル | 内容 |
+### 2. 起動
+
+```sh
+MEKIKI_PASSWORD=好きなパスワード ./mekiki serve -addr :8080 -data ./data
+```
+
+`http://サーバ:8080/` を開き、ユーザー名は任意・パスワードは `MEKIKI_PASSWORD` でログインする。
+
+| 環境変数 / フラグ | 内容 |
 |---|---|
-| `feeds/<名前>.opml` | 購読フィード一覧。`feeds/example.opml` の形式（カテゴリ→フィードの2階層） |
-| `profiles/<名前>.toml` | プロファイル。`profiles/rss.toml` を雛形に編集 |
-| `user_memory.txt`（任意） | 選定基準に加味したい興味・趣向の自由テキスト |
-| `env`（cron運用時） | 環境変数ファイル。`env.example` をコピーして作成 |
+| `-addr` / `MEKIKI_ADDR` | 待ち受けアドレス（既定 `:8080`） |
+| `-data` / `MEKIKI_DATA` | データディレクトリ（既定 `./data`）。`mekiki.db` が作られる |
+| `MEKIKI_PASSWORD` | 設定するとBasic認証をかける。**外部に公開するなら必ず設定する** |
+| `ANTHROPIC_API_KEY` | 画面でAPIキーを入れない場合に使うキー |
 
-プロファイルの最小構成:
+Basic認証は通信を暗号化しないので、インターネット越しに使う場合はHTTPS化したリバースプロキシ
+（Caddy・nginxなど）の内側に置く。
 
-```toml
-name = "rss"
-opml_path = "feeds/rss.opml"
-webhook_env = "RSS_DISCORD_WEBHOOK_URL"   # Webhook URLを読む環境変数の名前
+### 3. 画面での初期設定
 
-[prompts]
-select_criteria = """
-- 技術的に興味深いもの、実務に役立つものを優先してください
-"""
-```
+1. **フィード** — フィードURLを追加するか、OPMLをインポートする（形式は `feeds/example.opml`）
+2. **設定** — AI連携を選ぶ
+   - Anthropic API: APIキーを入力（またはサーバの環境変数 `ANTHROPIC_API_KEY`）。モデルの既定は `claude-opus-5-5`
+   - claude -p: mekikiを動かすユーザーで、サーバ上で一度 `claude` を起動してログインしておく
+   - 「AI接続テスト」ボタンで疎通を確認できる
+3. **設定** — 自分の興味・趣向、選定基準、要約実行の時刻（例 `07:00, 12:00, 18:00`）を入れる
+4. **今日** — 「今すぐ要約実行」を押すと最初のページができる
 
-## 動かす
+AI連携が未設定のうちは、定時の要約実行は保留される（設定が済むと、その日の直近の枠が実行される）。
 
-```sh
-nix develop
-export RSS_DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
-python3 -m mekiki profiles/rss.toml
-```
+## 動き方
 
-Webhookの環境変数が未設定の場合はドライラン（Discordへ送らず標準出力に表示）になる。
+- **フィード取得**: 設定した間隔（既定60分）で全フィードを取得する。要約実行の直前にも取得する
+- **要約実行（追記）**: 前回の実行で選定に渡していない新着記事だけを候補にし、今日のページに追記する。
+  今日すでに載っている記事のタイトルも渡し、同じ話題を選ばないようにしている。新着がなければ何もしない
+- **今日のページを作り直す**: 今日のページを消し、今日の候補記事すべてからページを作り直す
+  （選定・要約が成功してから置き換えるので、失敗しても元のページは残る）
+- 選定に失敗した実行は記事を消費しない（次回の実行で再び候補になる）
+- 実行の結果とClaudeの使用量は「履歴」画面と各日のページ下部で確認できる
 
-## ビルドとcron登録
-
-```sh
-nix build                                  # → result/bin/mekiki
-cp env.example env && $EDITOR env && chmod 600 env
-```
-
-`result/bin/mekiki` は `MEKIKI_DIR` が設定されていればそこへcdしてから実行する
-（cronは任意のカレントディレクトリで起動するため、envで指定しておく）。
-プロファイル・OPML・キャッシュの相対パスはそこを基準に解決される。
-
-```cron
-0 8 * * * . /path/to/mekiki/env && /path/to/mekiki/result/bin/mekiki profiles/rss.toml >> /var/log/mekiki-rss.log 2>&1
-```
-
-実行失敗時はDiscordに⚠️通知が送られる（Discord自体に届かない障害のときはcronログが頼り）。
-
-## テスト
+## コマンド
 
 ```sh
-nix develop -c python3 -m pytest tests/ -q         # 純関数の自動テスト（nix flake checkでも実行）
-python3 test_parts.py profiles/rss.toml opml       # OPMLパース確認
-python3 test_parts.py profiles/rss.toml summarize  # 要約・画像抽出の実地確認
+mekiki serve                       # Webサーバ＋スケジューラ
+mekiki import-opml FILE            # OPMLからフィードを登録
+mekiki fetch                       # フィードを1回取得
+mekiki digest [-rebuild]           # 要約実行を1回（サーバ停止中のメンテナンス用）
+```
+
+いずれも `-data` でデータディレクトリを指定する。`fetch` / `digest` はサーバとは別プロセスで動くため、
+サーバ稼働中はWeb画面のボタンを使う。
+
+## systemdで常駐させる
+
+`deploy/mekiki.service` を参考に:
+
+```sh
+sudo useradd -r -m -d /var/lib/mekiki -s /usr/sbin/nologin mekiki
+sudo cp mekiki /usr/local/bin/
+sudo cp deploy/mekiki.service /etc/systemd/system/
+sudo systemctl edit mekiki      # MEKIKI_PASSWORD などを設定
+sudo systemctl enable --now mekiki
+```
+
+`claude -p` 経路を使う場合は、サービスのユーザーで一度ログインしておく
+（`sudo -u mekiki -H claude`。認証情報は `/var/lib/mekiki/.claude` に保存される）。
+
+## 開発
+
+```sh
+nix develop      # go・gopls・claude-code
+go test ./...
+go run ./cmd/mekiki serve -data ./data
 ```
 
 ## ドキュメント

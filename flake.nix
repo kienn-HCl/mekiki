@@ -1,5 +1,5 @@
 {
-  description = "mekiki - RSSをClaudeで目利きしてDiscordに投稿するbot";
+  description = "mekiki - RSSをClaudeが目利きして要約する「今日のページ」Webアプリ";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -14,36 +14,32 @@
           config.allowUnfree = true; # claude-code
         };
 
-        python = pkgs.python3.withPackages (p: [ p.feedparser ]);
-        pythonDev = pkgs.python3.withPackages (p: [ p.feedparser p.pytest ]);
+        # 単体バイナリ（CGO不要。SQLiteも純Go実装）
+        mekiki = pkgs.buildGoModule {
+          pname = "mekiki";
+          version = "2.0.0";
+          src = pkgs.lib.cleanSource ./.;
+          vendorHash = "sha256-4TKPRXTc4fb+sGUztZVoWoJqM0xNh6M83OnsNqcAAXk=";
+          env.CGO_ENABLED = "0";
+          ldflags = [ "-s" "-w" "-X main.version=2.0.0" ];
+          meta.mainProgram = "mekiki";
+        };
 
-        mekiki = pkgs.writeShellApplication {
+        # claude -p 経路を使う場合用。PATHにclaude-codeを含めたラッパー
+        mekikiWithClaude = pkgs.writeShellApplication {
           name = "mekiki";
-          runtimeInputs = [ python pkgs.claude-code ];
-          text = ''
-            # MEKIKI_DIRが設定されていればそこへcd（cron等、任意のcwdからの起動用）。
-            # プロファイル・OPML・キャッシュの相対パスはcwd基準で解決される
-            if [ -n "''${MEKIKI_DIR:-}" ]; then
-              cd "$MEKIKI_DIR"
-            fi
-            export PYTHONPATH=${self}''${PYTHONPATH:+:$PYTHONPATH}
-            exec python3 -m mekiki "$@"
-          '';
+          runtimeInputs = [ mekiki pkgs.claude-code ];
+          text = ''exec ${mekiki}/bin/mekiki "$@"'';
         };
       in {
         packages.default = mekiki;
+        packages.with-claude = mekikiWithClaude;
 
-        checks.pytest = pkgs.runCommand "mekiki-pytest" {
-          nativeBuildInputs = [ pythonDev ];
-        } ''
-          cd ${self}
-          export PYTHONDONTWRITEBYTECODE=1
-          python3 -m pytest tests/ -q -p no:cacheprovider
-          touch $out
-        '';
+        # nix flake check でGoのテストを実行（buildGoModuleのcheckPhase）
+        checks.default = mekiki;
 
         devShells.default = pkgs.mkShell {
-          packages = [ pythonDev pkgs.claude-code ];
+          packages = [ pkgs.go pkgs.gopls pkgs.claude-code ];
         };
       });
 }
