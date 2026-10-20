@@ -1,0 +1,46 @@
+{{define "content"}}
+<div class="reader">
+  <aside class="side">
+    <form method="post" action="/actions/fetch">
+      <input type="hidden" name="back" value="{{.CurrentURL}}">
+      <button class="primary wide" {{if .Status.Fetching}}disabled{{end}}>今すぐ取得</button>
+    </form>
+    <p class="muted small">
+      最終取得: {{ago .Status.LastFetch.At}}
+      {{if not .Status.LastFetch.At.IsZero}}（新着{{.Status.LastFetch.Added}}件 / 失敗{{.Status.LastFetch.Failed}}件）{{end}}
+    </p>
+    <a class="sidelink{{if and (eq .FeedID 0) (eq .Category "")}} active{{end}}" href="{{.Prefix}}/articles">すべて</a>
+    {{range .Groups}}
+      <a class="sidelink cat{{if eq $.Category .Category}} active{{end}}" href="{{$.Prefix}}/articles?category={{.Category}}">{{if .Category}}{{.Category}}{{else}}（カテゴリなし）{{end}} <span class="count">{{.Unread}}</span></a>
+      {{range .Feeds}}
+      <a class="sidelink feed{{if eq $.FeedID .ID}} active{{end}}{{if not .Enabled}} disabled{{end}}" href="{{$.Prefix}}/articles?feed={{.ID}}">{{.Title}} <span class="count">{{.UnreadCount}}</span></a>
+      {{end}}
+    {{end}}
+  </aside>
+  <section class="list">
+    <div class="listhead">
+      <h1>{{.Title}}</h1>
+      <div class="actions">
+        <a class="button" href="{{.ToggleURL}}">{{if .Unread}}すべて表示{{else}}未読のみ{{end}}</a>
+        <form method="post" action="{{.Prefix}}/articles/read">
+          <input type="hidden" name="feed" value="{{.FeedID}}">
+          <input type="hidden" name="back" value="{{.CurrentURL}}">
+          <button>{{if .FeedID}}このフィードを{{else}}すべて{{end}}既読にする</button>
+        </form>
+      </div>
+    </div>
+    {{if not .Articles}}<p class="muted">記事がありません。{{if not .Groups}}<a href="{{.Prefix}}/feeds">フィード管理</a>からフィードを追加してください。{{end}}</p>{{end}}
+    {{range .Articles}}
+    <article class="row{{if .Read}} read{{end}}">
+      <a class="title" href="/go/{{.ID}}" target="_blank" rel="noopener">{{.Title}}</a>
+      <div class="meta">{{.FeedName}} · {{if .PublishedAt.IsZero}}取得 {{ago .FetchedAt}}{{else}}{{ago .PublishedAt}}{{end}}</div>
+      {{with snippet .Body 180}}<p class="snippet">{{.}}</p>{{end}}
+    </article>
+    {{end}}
+    <div class="pager">
+      {{if .PrevURL}}<a href="{{.PrevURL}}">← 新しい記事</a>{{end}}
+      {{if .NextURL}}<a href="{{.NextURL}}">古い記事 →</a>{{end}}
+    </div>
+  </section>
+</div>
+{{end}}

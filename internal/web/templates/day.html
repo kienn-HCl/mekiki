@@ -1,0 +1,86 @@
+{{define "content"}}
+<section class="dayhead">
+  <div class="daynav">
+    {{if .Prev}}<a href="{{.Prefix}}/day/{{.Prev}}">← {{fmtDate .Prev}}</a>{{else}}<span></span>{{end}}
+    {{if .Next}}<a href="{{.Prefix}}/{{if ne .Next .Today}}day/{{.Next}}{{end}}">{{fmtDate .Next}} →</a>{{end}}
+  </div>
+  <h1><span class="pname">{{.Profile.Name}}</span> {{fmtDate .Date}}{{if .IsToday}} <span class="tag">今日</span>{{end}}</h1>
+  <p class="muted">
+    {{if .Exists}}{{.Page.ItemCount}}件 · 最終更新 {{fmtTime .Page.UpdatedAt}}{{else}}まだページがありません{{end}}
+    {{if .IsToday}} · 要約実行時刻: {{range $i, $t := .Profile.DigestTimes}}{{if $i}}, {{end}}{{$t}}{{else}}未設定（手動のみ）{{end}}{{end}}
+  </p>
+  {{if .IsToday}}
+  <div class="actions">
+    <form method="post" action="{{.Prefix}}/actions/digest">
+      <input type="hidden" name="back" value="{{.Prefix}}/">
+      <button class="primary" {{if .Status.Digesting}}disabled{{end}}>今すぐ要約実行（新着分を追記）</button>
+    </form>
+    <form method="post" action="{{.Prefix}}/actions/rebuild"
+          onsubmit="return confirm('今日のページを消して、今日の候補記事から作り直します。よろしいですか？')">
+      <input type="hidden" name="back" value="{{.Prefix}}/">
+      <button class="danger" {{if .Status.Digesting}}disabled{{end}}>今日のページを作り直す</button>
+    </form>
+  </div>
+  {{end}}
+</section>
+
+{{if .Page.Overview}}
+<section class="overview">
+  <h2>今日のまとめ</h2>
+  {{overview .Page.Overview}}
+</section>
+{{end}}
+
+{{if not .Groups}}
+<section class="empty">
+  {{if .IsToday}}
+  <p>今日のピックアップはまだありません。</p>
+  <p class="muted">設定した時刻になると自動で作成されます。すぐに作るには「今すぐ要約実行」を押してください。
+  {{if not .HasFeeds}}このプロファイルにはフィードがありません。<a href="{{.Prefix}}/feeds">フィード管理</a> から追加してください。{{end}}
+  AI連携は <a href="/settings">全体設定</a>、選定基準や実行時刻は <a href="{{.Prefix}}/settings">プロファイル設定</a> で行います。</p>
+  {{else}}
+  <p>この日のページはありません。</p>
+  {{end}}
+</section>
+{{end}}
+
+{{range .Groups}}
+<section class="group">
+  <h3 class="grouphead">
+    {{if .Run.Date}}{{fmtTime .Run.StartedAt}} の{{kindLabel .Run.Kind}}（{{triggerLabel .Run.Trigger}}{{if .Run.Slot}} {{.Run.Slot}}{{end}}）{{else}}{{fmtTime .Run.StartedAt}}{{end}}
+    <span class="muted">{{len .Items}}件</span>
+  </h3>
+  <div class="cards">
+  {{range .Items}}
+    <article class="card{{if not .SummaryOK}} failed{{end}}">
+      {{if .Image}}<a class="thumb" href="{{.Link}}" target="_blank" rel="noopener noreferrer"><img src="{{.Image}}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>{{end}}
+      <div class="body">
+        <div class="meta">{{.Category}} / {{.FeedName}}</div>
+        <h4><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a></h4>
+        <p class="summary">{{.Summary}}</p>
+        <div class="meta small">要約元: {{stageLabel .Stage}}</div>
+      </div>
+    </article>
+  {{end}}
+  </div>
+</section>
+{{end}}
+
+{{if .Runs}}
+<details class="runlog">
+  <summary>この日の実行履歴（{{len .Runs}}回）</summary>
+  <table>
+    <tr><th>開始</th><th>種別</th><th>結果</th><th>候補</th><th>選定</th><th>内容</th></tr>
+    {{range .Runs}}
+    <tr>
+      <td>{{fmtTime .StartedAt}}</td>
+      <td>{{kindLabel .Kind}} / {{triggerLabel .Trigger}}{{if .Slot}} {{.Slot}}{{end}}</td>
+      <td><span class="st {{.Status}}">{{.Status}}</span></td>
+      <td>{{.Candidates}}</td><td>{{.Picked}}</td>
+      <td>{{.Message}}<div class="muted small">{{usage .Usage}}</div></td>
+    </tr>
+    {{end}}
+  </table>
+</details>
+{{end}}
+{{end}}

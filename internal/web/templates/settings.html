@@ -1,0 +1,105 @@
+{{define "content"}}
+<h1>全体設定</h1>
+<p class="muted">AI連携とフィード取得は全プロファイル共通です。選定基準・興味・実行時刻・Discordは各プロファイルの「プロファイル設定」で行います。</p>
+<form method="post" action="/settings" class="settings">
+
+<fieldset class="ai">
+  <legend>AI連携</legend>
+  <p class="muted small">使うAIを選ぶと、そのAIの設定欄が開きます。設定はAIごとに保存されるので、切り替えても元の設定は残ります。</p>
+  {{range .Providers}}
+  <div class="provider">
+    <label class="radio"><input type="radio" name="backend" value="{{.ID}}" {{if eq .ID $.S.Backend}}checked{{end}}>{{.Label}}
+      <span class="muted small">{{.KeySource}}</span></label>
+    <div class="provider-fields"><div class="provider-inner">
+      {{if eq .ID "compat"}}
+      <label>APIのURL（/chat/completions の手前まで）
+        <input name="compat_url" value="{{$.S.CompatURL}}" placeholder="http://localhost:11434/v1"></label>
+      {{end}}
+      <div class="grid">
+        <label>APIキー{{if .KeyHint}} <span class="muted small">（{{.KeyHint}}）</span>{{end}}
+          <input name="api_key.{{.ID}}" type="password" autocomplete="off" placeholder="{{if .KeyHint}}変更する場合のみ入力{{else}}{{if .KeyOptional}}不要なら空のまま{{else}}未設定{{end}}{{end}}"></label>
+        <label>モデル<input name="model.{{.ID}}" value="{{.Model}}" placeholder="{{.ModelHint}}"></label>
+        <label>effort（思考の深さ）
+          <select name="effort.{{.ID}}">
+            <option value="" {{if eq .Effort ""}}selected{{end}}>指定しない（モデルの既定）</option>
+            {{$cur := .Effort}}{{range $e := (list "low" "medium" "high" "xhigh" "max")}}<option {{if eq $e $cur}}selected{{end}}>{{$e}}</option>{{end}}
+          </select></label>
+      </div>
+      <p class="muted small">キーを画面で入れない場合は環境変数 <code>{{.KeyEnv}}</code> を使います。
+      {{if eq .ID "anthropic"}}effort は output_config.effort として送ります。{{else}}effort は reasoning_effort として送り（xhigh / max は high）、モデルが対応していなければ外して再送します。{{end}}</p>
+      {{if eq .KeySource "画面で設定済み"}}
+      <label class="check"><input type="checkbox" name="api_key_clear.{{.ID}}" value="1">画面で設定したキーを削除する</label>
+      {{end}}
+      {{if .WebFetch}}
+      <label class="check"><input type="checkbox" name="web_fetch.{{.ID}}" value="1" {{if .UseFetch}}checked{{end}}>本文を取得できない記事は、AIにWebページを取得させて要約する</label>
+      {{end}}
+    </div></div>
+  </div>
+  {{end}}
+  <div class="provider">
+    <label class="radio"><input type="radio" name="backend" value="cli" {{if eq .S.Backend "cli"}}checked{{end}}>claude -p（Claude Code CLI）
+      <span class="muted small">サーバでログイン済みのClaude Codeのサブスクリプション枠で動く</span></label>
+    <div class="provider-fields"><div class="provider-inner">
+      <div class="grid">
+        <label>claude コマンドのパス<input name="cli_path" value="{{.S.CLIPath}}"></label>
+        <label>モデル（--model）<input name="cli_model" value="{{.S.CLIModel}}" placeholder="空ならCLIのデフォルト"></label>
+      </div>
+      <p class="muted small">mekikiを動かすユーザーで、サーバ上で一度 <code>claude</code> を起動してログインしておいてください。</p>
+      <label class="check"><input type="checkbox" name="web_fetch.cli" value="1" {{if index .S.WebFetch "cli"}}checked{{end}}>本文を取得できない記事は、AIにWebページを取得させて要約する</label>
+    </div></div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>全体</legend>
+  <div class="grid">
+    <label>タイムゾーン
+      <select name="timezone">
+        {{range .Timezones}}<option value="{{.Name}}" {{if eq .Name $.S.Timezone}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select></label>
+    <label>フィード取得間隔（分）<input name="fetch_interval" type="number" min="0" value="{{.S.FetchInterval}}"></label>
+  </div>
+  <p class="muted small">タイムゾーンは「今日」の日付と要約実行時刻の基準です。取得間隔を0にすると定期取得しません。</p>
+</fieldset>
+
+<fieldset>
+  <legend>フィード取得</legend>
+  <div class="grid">
+    <label>1フィードの取得件数<input name="articles_per_feed" type="number" min="1" value="{{.S.ArticlesPerFeed}}"></label>
+    <label>スキップまでの失敗回数<input name="max_failures" type="number" min="1" value="{{.S.MaxFailures}}"></label>
+    <label>スキップ後の再試行（時間）<input name="failure_retry_hours" type="number" min="1" value="{{.S.FailureRetryHours}}"></label>
+    <label>記事の保持日数<input name="retention_days" type="number" min="1" value="{{.S.RetentionDays}}"></label>
+  </div>
+  <p class="muted small">連続して失敗したフィードは取得をスキップし、再試行の間隔ごとに自動で試し直します。
+  保持日数を過ぎた記事はRSS画面から消えますが、日付ページに載った記事はずっと残ります。</p>
+</fieldset>
+
+<div class="actions">
+  <button class="primary">保存</button>
+</div>
+</form>
+
+<form method="post" action="/settings/test" class="inline">
+  <button>AI接続テスト（保存済みの設定で実行）</button>
+</form>
+
+<fieldset class="backup">
+  <legend>設定ファイルとバックアップ</legend>
+  <p class="muted small">設定は {{if .ConfPath}}<code>{{.ConfPath}}</code>{{else}}config.toml{{end}}、フィード一覧はプロファイルごとに
+  <code>{{if .ConfDir}}{{.ConfDir}}/{{end}}feeds/&lt;プロファイルID&gt;.opml</code> に保存されています。
+  サーバ上でテキストエディタで編集したら、mekikiを再起動すると反映されます（書き間違いがあればエラーを出して起動しません）。
+  記事・日付ページ・実行履歴はデータベース（mekiki.db）に入っています。</p>
+  <div class="actions">
+    <a class="button" href="/backup/config.zip">設定一式をダウンロード（zip）</a>
+    <a class="button" href="/backup/config.zip?secrets=0">APIキー・Webhookを除いてダウンロード</a>
+    <a class="button" href="/backup/mekiki.db">データ全体（mekiki.db）をダウンロード</a>
+  </div>
+  <form method="post" action="/backup/restore" enctype="multipart/form-data" class="inline"
+        onsubmit="return confirm('アップロードしたファイルで、全体設定・プロファイル（zipならフィード一覧も）を置き換えます。ファイルにないプロファイルはページ・履歴ごと削除されます（削除前のDBは backups/ に退避します）。よろしいですか？')">
+    <input type="file" name="config" accept=".zip,.toml" required>
+    <button>設定一式から復元</button>
+  </form>
+  <p class="muted small">復元には設定一式のzipか config.toml を使えます（config.toml だけのときはフィード一覧は今のまま）。
+  データ全体を戻すときは、mekikiを止めてから mekiki.db をデータディレクトリに置き直してください。</p>
+</fieldset>
+{{end}}

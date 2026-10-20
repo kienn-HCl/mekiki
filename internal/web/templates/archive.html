@@ -1,0 +1,13 @@
+{{define "content"}}
+<h1>{{.Profile.Name}} アーカイブ</h1>
+{{if not .Pages}}<p class="muted">まだページがありません。</p>{{end}}
+<ul class="archive">
+{{range .Pages}}
+  <li>
+    <a href="{{$.Prefix}}/{{if ne .Date $.Today}}day/{{.Date}}{{end}}">{{fmtDate .Date}}</a>
+    <span class="muted">{{.ItemCount}}件</span>
+    {{if .Overview}}<div class="archive-ov">{{overview .Overview}}</div>{{end}}
+  </li>
+{{end}}
+</ul>
+{{end}}

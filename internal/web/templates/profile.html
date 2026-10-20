@@ -1,0 +1,74 @@
+{{define "content"}}
+<h1>{{.P.Name}} のプロファイル設定</h1>
+<form method="post" action="{{.Prefix}}/settings" class="settings">
+
+<fieldset>
+  <legend>プロファイル</legend>
+  <div class="grid">
+    <label>表示名<input name="name" value="{{.P.Name}}" required></label>
+    <label>ID<input name="slug" value="{{.P.Slug}}" required pattern="[a-z0-9][a-z0-9_\-]{0,31}"></label>
+  </div>
+  <p class="muted small">IDはURL（/p/ID/）に使います。英小文字・数字・-・_ の32字以内。</p>
+</fieldset>
+
+<fieldset>
+  <legend>ピックアップと要約</legend>
+  <label>あなたの興味・趣向（選定と要約・今日のまとめに反映されます）
+    <textarea name="user_memory" rows="5" placeholder="例: RustとGoが好き。セキュリティに強い関心がある。マーケティング系のAI活用にはあまり関心がない。">{{.P.UserMemory}}</textarea></label>
+  <label>選定基準
+    <textarea name="select_criteria" rows="6" required>{{.P.SelectCriteria}}</textarea></label>
+  <div class="grid">
+    <label>1回の最大追加件数<input name="pick_count" type="number" min="1" max="100" value="{{.P.PickCount}}"></label>
+    <label>候補にする期間（時間）<input name="hours_back" type="number" min="1" value="{{.P.HoursBack}}"></label>
+  </div>
+  <p class="muted small">注目に値する記事が少なければ、最大件数より少なく選ばれます。候補にする期間より古い記事は選ばれません。</p>
+  <label class="check"><input type="checkbox" name="overview" value="1" {{if .P.Overview}}checked{{end}}>「今日のまとめ」を生成する（実行ごとに1回AIを呼びます）</label>
+</fieldset>
+
+<fieldset>
+  <legend>スケジュール</legend>
+  <label>要約実行の時刻（HH:MM、カンマ区切りで複数可。空なら手動のみ）
+    <input name="digest_times" value="{{.DigestTimes}}" placeholder="07:00, 12:00, 18:00"></label>
+  <p class="muted small">各時刻の実行は、前回の実行以降に増えた記事から選んで今日のページに追記します。日付が変わると新しいページになります。
+  時刻のタイムゾーンは <a href="/settings">全体設定</a> で決めます。</p>
+</fieldset>
+
+<fieldset>
+  <legend>Discord投稿（任意）</legend>
+  <p class="muted small">Webhook URLを設定すると、要約実行で追加された記事をDiscordにも投稿します。</p>
+  <label>Webhook URL
+    <span class="secret">
+      <input name="discord_webhook" type="password" autocomplete="off" value="{{.P.DiscordWebhook}}"
+             placeholder="https://discord.com/api/webhooks/..." id="discord-webhook">
+      <button type="button" class="reveal" data-target="discord-webhook">表示</button>
+    </span></label>
+  <p class="muted small">{{if .P.DiscordWebhook}}保存済みです。{{end}}空欄にして保存すると投稿をやめます。
+  WebhookのURLを知っている人は誰でもそのチャンネルに投稿できるので、他の人には見せないでください。</p>
+  <div class="grid">
+    <label>見出し<input name="discord_title" value="{{.P.DiscordTitle}}"></label>
+    <label>embedの色（16進）<input name="discord_color" value="{{printf "%06X" .P.DiscordColor}}"></label>
+    <label>1メッセージのembed数<input name="discord_embeds" type="number" min="1" max="10" value="{{.P.DiscordEmbeds}}"></label>
+    <label>Web画面のURL<input name="discord_base_url" value="{{.P.DiscordBaseURL}}" placeholder="http://server:8080"></label>
+  </div>
+  <p class="muted small">embed数は1〜10（Discord側のエラーが続く場合は1にすると1件ずつ送ります）。Web画面のURLを入れると、投稿にその日のページへのリンクが付きます。</p>
+  <label class="check"><input type="checkbox" name="discord_after_fail" value="1" {{if .P.DiscordAfterFail}}checked{{end}}>要約実行に失敗したらDiscordに⚠️通知する</label>
+  <div class="actions">
+    <button formaction="{{.Prefix}}/discord/test" formnovalidate>テスト投稿</button>
+    <span class="muted small">入力中のURL・見出し・色で、テストメッセージとサンプル記事を1件送ります（保存はしません）。</span>
+  </div>
+</fieldset>
+
+<div class="actions">
+  <button class="primary">保存</button>
+</div>
+</form>
+
+<details class="danger-zone">
+  <summary>プロファイルを削除</summary>
+  <form method="post" action="{{.Prefix}}/delete">
+    <p>このプロファイルのフィード・記事・すべての日付ページ・実行履歴を削除します。元に戻せません。</p>
+    <label>確認のためプロファイルID（<code>{{.P.Slug}}</code>）を入力 <input name="confirm" autocomplete="off"></label>
+    <button class="danger">削除する</button>
+  </form>
+</details>
+{{end}}

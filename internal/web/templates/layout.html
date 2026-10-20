@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}} — {{end}}mekiki</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="topbar">
+  <div class="toprow">
+    <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="22" height="22">mekiki</a>
+    <nav class="profiles" aria-label="プロファイル">
+      {{range .Profiles}}<a href="/p/{{.Slug}}/" class="{{if eq .ID $.Profile.ID}}active{{end}}">{{.Name}}</a>{{end}}
+      <a href="/profiles" class="manage{{if eq .Nav "profiles"}} active{{end}}" title="プロファイルの管理">＋</a>
+    </nav>
+    <a href="/settings" class="gear{{if eq .Nav "settings"}} active{{end}}">全体設定</a>
+  </div>
+  {{if .Prefix}}
+  <nav class="sub" aria-label="{{.Profile.Name}}">
+    <a href="{{.Prefix}}/" class="{{if eq .Nav "day"}}active{{end}}">今日</a>
+    <a href="{{.Prefix}}/archive" class="{{if eq .Nav "archive"}}active{{end}}">アーカイブ</a>
+    <a href="{{.Prefix}}/articles" class="{{if eq .Nav "articles"}}active{{end}}">RSS</a>
+    <a href="{{.Prefix}}/feeds" class="{{if eq .Nav "feeds"}}active{{end}}">フィード</a>
+    <a href="{{.Prefix}}/runs" class="{{if eq .Nav "runs"}}active{{end}}">履歴</a>
+    <a href="{{.Prefix}}/settings" class="{{if eq .Nav "profile"}}active{{end}}">プロファイル設定</a>
+  </nav>
+  {{end}}
+</header>
+{{if .Busy}}
+<div class="busy" id="busy"><span class="spinner"></span>{{.Busy}}</div>
+{{end}}
+<main>
+{{if .Flash}}<div class="flash ok">{{.Flash}}</div>{{end}}
+{{if .Error}}<div class="flash err">{{.Error}}</div>{{end}}
+{{if .ConfErr}}<div class="flash err">{{.ConfErr}}</div>{{end}}
+{{template "content" .}}
+</main>
+<footer class="foot">mekiki</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
