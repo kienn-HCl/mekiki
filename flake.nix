@@ -19,7 +19,7 @@
           pname = "mekiki";
           version = "2.0.0";
           src = pkgs.lib.cleanSource ./.;
-          vendorHash = "sha256-4TKPRXTc4fb+sGUztZVoWoJqM0xNh6M83OnsNqcAAXk=";
+          vendorHash = "sha256-H8YMpswJ+xbFM8Jph/pqa6fJN8eREj8yyYPNevLT5ME=";
           env.CGO_ENABLED = "0";
           ldflags = [ "-s" "-w" "-X main.version=2.0.0" ];
           meta.mainProgram = "mekiki";

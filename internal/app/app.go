@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kienn-HCl/mekiki/internal/ai"
+	"github.com/kienn-HCl/mekiki/internal/conffile"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
@@ -20,6 +21,7 @@ var ErrFetchBusy = errors.New("フィード取得中です")
 type App struct {
 	Store  *store.Store
 	Digest *digest.Runner
+	Conf   *conffile.Manager // 設定ファイル（nilなら書き出さない）
 
 	fetchMu  sync.Mutex // フィード取得の排他（全プロファイル共通）
 	stateMu  sync.Mutex

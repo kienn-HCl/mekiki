@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tzdataのない最小環境でもタイムゾーン設定を使えるように
 
 	"github.com/kienn-HCl/mekiki/internal/app"
+	"github.com/kienn-HCl/mekiki/internal/conffile"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
@@ -38,6 +40,7 @@ const usage = `mekiki — RSSの注目記事をAIが選んで要約するWebア�
 環境変数:
   MEKIKI_ADDR       待ち受けアドレス（-addr の既定値。既定 :8080）
   MEKIKI_DATA       データディレクトリ（-data の既定値。既定 ./data）
+  MEKIKI_CONFIG     設定ファイル（-config の既定値。既定 <データディレクトリ>/config.toml）
   MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける
   MEKIKI_USER       Basic認証のユーザー名（既定 mekiki）
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
@@ -81,12 +84,26 @@ func env(key, def string) string {
 	return def
 }
 
-func openStore(fs *flag.FlagSet, args []string) (*store.Store, error) {
+// openStore はDBを開き、設定ファイル（config.toml）の内容をDBに反映する。
+func openStore(fs *flag.FlagSet, args []string) (*store.Store, *conffile.Manager, error) {
 	data := fs.String("data", env("MEKIKI_DATA", "./data"), "データディレクトリ")
+	cfgPath := fs.String("config", env("MEKIKI_CONFIG", ""), "設定ファイル（既定 <data>/config.toml）")
 	if err := fs.Parse(args); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return store.Open(*data)
+	st, err := store.Open(*data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if *cfgPath == "" {
+		*cfgPath = filepath.Join(*data, "config.toml")
+	}
+	conf := conffile.New(st, *cfgPath)
+	if err := conf.Init(context.Background()); err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	return st, conf, nil
 }
 
 // findProfile は -profile で指定されたプロファイル（空なら最初のもの）を返す。
@@ -112,7 +129,7 @@ func findProfile(st *store.Store, slug string) (config.Profile, error) {
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", env("MEKIKI_ADDR", ":8080"), "待ち受けアドレス")
-	st, err := openStore(fs, args)
+	st, conf, err := openStore(fs, args)
 	if err != nil {
 		return err
 	}
@@ -126,8 +143,14 @@ func serve(args []string) error {
 	if err := st.EnsureProfile(ctx); err != nil {
 		return err
 	}
+	if err := conf.Save(ctx); err != nil { // 初回起動で作ったプロファイルを書き出す
+		return err
+	}
 
 	a := app.New(st)
+	a.Conf = conf
+	go conf.Watch(ctx)
+	slog.Info("設定ファイル", "path", conf.Path)
 	srv, err := web.New(a, env("MEKIKI_USER", "mekiki"), os.Getenv("MEKIKI_PASSWORD"))
 	if err != nil {
 		return err
@@ -158,7 +181,7 @@ func importOPML(args []string) error {
 	fs := flag.NewFlagSet("import-opml", flag.ExitOnError)
 	slug := fs.String("profile", "", "登録先のプロファイルID")
 	newName := fs.String("new", "", "このプロファイル名で -profile のプロファイルを新規作成してから登録")
-	st, err := openStore(fs, args)
+	st, conf, err := openStore(fs, args)
 	if err != nil {
 		return err
 	}
@@ -199,12 +222,12 @@ func importOPML(args []string) error {
 		}
 	}
 	fmt.Printf("プロファイル「%s」に%d件を追加しました（%d件は登録済み）\n", p.Name, added, len(list)-added)
-	return nil
+	return conf.Save(context.Background())
 }
 
 func fetchOnce(args []string) error {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
-	st, err := openStore(fs, args)
+	st, _, err := openStore(fs, args)
 	if err != nil {
 		return err
 	}
@@ -222,7 +245,7 @@ func digestOnce(args []string) error {
 	fs := flag.NewFlagSet("digest", flag.ExitOnError)
 	rebuild := fs.Bool("rebuild", false, "今日のページを作り直す")
 	slug := fs.String("profile", "", "対象のプロファイルID")
-	st, err := openStore(fs, args)
+	st, _, err := openStore(fs, args)
 	if err != nil {
 		return err
 	}

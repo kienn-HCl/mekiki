@@ -491,6 +491,105 @@ func (s *Store) MoveProfile(ctx context.Context, id int64, to int) error {
 	return tx.Commit()
 }
 
+// SetProfileOrder はプロファイルの並びを ids の順にする（含まれないものは後ろに回る）。
+func (s *Store) SetProfileOrder(ctx context.Context, ids []int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE profiles SET position = position + 100000`); err != nil {
+		return err
+	}
+	for i, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE profiles SET position = ? WHERE id = ?`, i+1, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// FeedDef は設定ファイルに書くフィードの定義（取得状態はDB側にだけ持つ）。
+type FeedDef struct {
+	Title    string
+	URL      string
+	Category string
+	Enabled  bool
+}
+
+// SyncFeeds はプロファイルのフィード一覧を defs に合わせる。URLで突き合わせ、
+// あるものは名前・カテゴリ・有効/無効・並びを更新、ないものは追加、defs にないものは削除する
+// （削除したフィードの記事も消える。取得状態・記事はURLが同じ限り引き継がれる）。
+func (s *Store) SyncFeeds(ctx context.Context, profileID int64, defs []FeedDef) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id, url FROM feeds WHERE profile_id = ?`, profileID)
+	if err != nil {
+		return err
+	}
+	existing := map[string]int64{}
+	for rows.Next() {
+		var id int64
+		var u string
+		if err := rows.Scan(&id, &u); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[u] = id
+	}
+	rows.Close()
+	for i, d := range defs {
+		if id, ok := existing[d.URL]; ok {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE feeds SET title = ?, category = ?, enabled = ?, position = ? WHERE id = ?`,
+				d.Title, d.Category, d.Enabled, i+1, id); err != nil {
+				return err
+			}
+			delete(existing, d.URL)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO feeds(profile_id, title, url, category, enabled, position) VALUES(?, ?, ?, ?, ?, ?)`,
+			profileID, d.Title, d.URL, d.Category, d.Enabled, i+1); err != nil {
+			return err
+		}
+	}
+	for _, id := range existing {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM feeds WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// FeedDefs はプロファイルのフィード定義を登録順に返す。
+func (s *Store) FeedDefs(ctx context.Context, profileID int64) ([]FeedDef, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT title, url, category, enabled FROM feeds WHERE profile_id = ? ORDER BY position, id`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FeedDef
+	for rows.Next() {
+		var d FeedDef
+		if err := rows.Scan(&d.Title, &d.URL, &d.Category, &d.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// BackupTo はDB全体の一貫したコピーを path に書き出す（稼働中でも取れる）。
+func (s *Store) BackupTo(ctx context.Context, path string) error {
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+	return err
+}
+
 // DeleteProfile はプロファイルとそのフィード・記事・ページ・履歴をすべて消す。
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)

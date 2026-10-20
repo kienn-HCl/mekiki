@@ -1,17 +1,21 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kienn-HCl/mekiki/internal/app"
+	"github.com/kienn-HCl/mekiki/internal/conffile"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/store"
 )
@@ -26,7 +30,12 @@ func newServer(t *testing.T, password string) (*httptest.Server, *store.Store) {
 	if err := st.EnsureProfile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := New(app.New(st), "me", password)
+	a := app.New(st)
+	a.Conf = conffile.New(st, filepath.Join(t.TempDir(), "config.toml"))
+	if err := a.Conf.Save(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := New(a, "me", password)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,5 +370,55 @@ func TestReorderProfilesAndDefault(t *testing.T) {
 	_, body := get(t, ts, "/profiles")
 	if !strings.Contains(body, `<span class="tag">既定</span>`) {
 		t.Error("既定の表示がない")
+	}
+}
+
+func TestConfigFileBackupAndRestore(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	post(t, ts, "/p/main/feeds/add", url.Values{"url": {"https://a.example/feed"}, "title": {"A"}})
+
+	// 画面での変更が設定ファイルに書き出される
+	code, body := get(t, ts, "/backup/config.toml")
+	if code != http.StatusOK || !strings.Contains(body, "url = 'https://a.example/feed'") {
+		t.Fatalf("設定ファイルのダウンロード: %d\n%s", code, body)
+	}
+	if code, db := get(t, ts, "/backup/mekiki.db"); code != http.StatusOK || !strings.HasPrefix(db, "SQLite format 3") {
+		t.Errorf("DBのダウンロード: %d", code)
+	}
+
+	// 復元: フィードを差し替えたファイルをアップロード
+	edited := strings.Replace(body, "https://a.example/feed", "https://b.example/feed", 1)
+	upload := func(data string) string {
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("config", "config.toml")
+		fw.Write([]byte(data))
+		mw.Close()
+		req, _ := http.NewRequest("POST", ts.URL+"/backup/restore", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		resp, err := noRedirect().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("Location")
+	}
+	if loc := upload(edited); !strings.Contains(loc, "msg=") {
+		t.Fatalf("復元に失敗: %s", loc)
+	}
+	feeds, _ := st.Feeds(ctx, 1)
+	if len(feeds) != 1 || feeds[0].URL != "https://b.example/feed" {
+		t.Errorf("復元後のフィード: %+v", feeds)
+	}
+	if loc := upload("これはTOMLではない"); !strings.Contains(loc, "err=") {
+		t.Errorf("壊れたファイルで復元できてしまう: %s", loc)
+	}
+	if feeds, _ := st.Feeds(ctx, 1); len(feeds) != 1 || feeds[0].URL != "https://b.example/feed" {
+		t.Errorf("失敗した復元で設定が変わった: %+v", feeds)
+	}
+	_, page := get(t, ts, "/settings")
+	if strings.Contains(page, "設定ファイルの変更を反映できませんでした") {
+		t.Error("アップロードの失敗がファイルのエラーとして表示されている")
 	}
 }

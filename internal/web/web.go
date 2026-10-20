@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/kienn-HCl/mekiki/internal/ai"
 	"github.com/kienn-HCl/mekiki/internal/app"
+	"github.com/kienn-HCl/mekiki/internal/conffile"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
 	"github.com/kienn-HCl/mekiki/internal/discord"
@@ -94,6 +97,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /profiles", s.actionCreateProfile)
 	mux.HandleFunc("POST /profiles/{slug}/move", s.actionMoveProfile)
 	mux.HandleFunc("POST /actions/fetch", s.actionFetch)
+	mux.HandleFunc("GET /backup/config.toml", s.downloadConfig)
+	mux.HandleFunc("GET /backup/mekiki.db", s.downloadDB)
+	mux.HandleFunc("POST /backup/restore", s.actionRestoreConfig)
 
 	p := func(pattern string, h profileHandler) {
 		method, path, _ := strings.Cut(pattern, " ")
@@ -118,7 +124,7 @@ func (s *Server) Handler() http.Handler {
 	p("POST /feeds/{id}/update", s.actionUpdateFeed)
 	p("POST /feeds/{id}/delete", s.actionDeleteFeed)
 	p("POST /feeds/reset", s.actionResetFailures)
-	return s.auth(sameOrigin(mux))
+	return s.auth(sameOrigin(s.saveConfigAfterPost(mux)))
 }
 
 type profileHandler func(w http.ResponseWriter, r *http.Request, p config.Profile)
@@ -174,6 +180,17 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
+// saveConfigAfterPost はPOST（設定・プロファイル・フィードの変更）の後に設定ファイルを書き出す。
+// 内容が変わっていなければ書かないので、設定に関係ないPOSTの後でも害はない。
+func (s *Server) saveConfigAfterPost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if r.Method == http.MethodPost {
+			s.App.Conf.SaveOrLog(context.WithoutCancel(r.Context()))
+		}
+	})
+}
+
 // sameOrigin は別サイトからのPOST（CSRF）を拒否する。
 func sameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +224,7 @@ type base struct {
 	Profiles []config.Profile // 切り替え用
 	Prefix   string           // /p/{slug}
 	Busy     string           // 実行中ジョブの説明
+	ConfErr  string           // 設定ファイルを反映できなかったときのエラー
 }
 
 func (s *Server) base(r *http.Request, p config.Profile, nav, title string) base {
@@ -223,6 +241,7 @@ func (s *Server) base(r *http.Request, p config.Profile, nav, title string) base
 		Status:   s.App.Status(),
 		Profile:  p,
 		Profiles: profiles,
+		ConfErr:  s.App.Conf.LastError(),
 	}
 	if p.ID != 0 {
 		b.Prefix = prefix(p)
@@ -929,6 +948,7 @@ type settingsData struct {
 	S         config.Settings
 	Providers []providerView
 	Timezones []tzOption
+	ConfPath  string
 }
 
 type tzOption struct{ Name, Label string }
@@ -965,6 +985,9 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg,
 		Timezones: timezoneOptions(cfg.Timezone)}
+	if s.App.Conf != nil {
+		d.ConfPath = s.App.Conf.Path
+	}
 	for _, p := range config.Providers {
 		v := providerView{Provider: p, Model: cfg.Models[p.ID], Effort: cfg.Effort(p.ID), UseFetch: cfg.UseWebFetch(p.ID)}
 		switch {
@@ -1069,6 +1092,68 @@ func (s *Server) actionTestAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	back(w, r, "/settings", "msg", fmt.Sprintf("接続テスト成功（%s）: %s", backend.Name(), snippet(resp.Text, 100)))
+}
+
+// ---- バックアップ ----
+
+// downloadConfig は現在の設定を config.toml として渡す（?secrets=0 ならAPIキー・Webhookを除く）。
+func (s *Server) downloadConfig(w http.ResponseWriter, r *http.Request) {
+	f, err := conffile.Export(r.Context(), s.App.Store)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	name := "mekiki-config.toml"
+	if r.URL.Query().Get("secrets") == "0" {
+		f.StripSecrets()
+		name = "mekiki-config-nosecrets.toml"
+	}
+	data, err := conffile.Encode(f)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	_, _ = w.Write(data)
+}
+
+// downloadDB はDB全体（記事・ページ・履歴を含む）の一貫したコピーを渡す。
+func (s *Server) downloadDB(w http.ResponseWriter, r *http.Request) {
+	dir, err := os.MkdirTemp("", "mekiki-backup-")
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "mekiki.db")
+	if err := s.App.Store.BackupTo(r.Context(), path); err != nil {
+		serverError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.sqlite3")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="mekiki-%s.db"`, time.Now().Format("20060102")))
+	http.ServeFile(w, r, path)
+}
+
+// actionRestoreConfig はアップロードされた config.toml で設定を置き換える。
+func (s *Server) actionRestoreConfig(w http.ResponseWriter, r *http.Request) {
+	file, _, err := r.FormFile("config")
+	if err != nil {
+		back(w, r, "/settings", "err", "設定ファイルを選択してください")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 10<<20))
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if err := s.App.Conf.Import(r.Context(), data); err != nil {
+		back(w, r, "/settings", "err", "設定ファイルを読み込めませんでした（何も変更していません）: "+err.Error())
+		return
+	}
+	back(w, r, "/settings", "msg", "設定ファイルから設定を復元しました")
 }
 
 // ---- テンプレート関数 ----

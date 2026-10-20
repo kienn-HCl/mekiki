@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/mmcdole/gofeed v1.5.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/net v0.61.0
 	modernc.org/sqlite v1.60.1
 )
