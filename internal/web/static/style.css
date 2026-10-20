@@ -172,6 +172,16 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .settings legend { font-weight: 700; padding: 0 6px; }
 .settings .sub { border-left: 3px solid var(--border); padding-left: 12px; margin: 8px 0; }
 .settings .sub summary { cursor: pointer; font-weight: 600; font-size: .95rem; }
+/* AI連携: 選んだAIの設定欄だけを表示する */
+.provider { border-radius: 8px; padding: 2px 10px; margin: 2px -10px; }
+.provider:has(> label input:checked) { background: var(--bg); }
+.provider-fields { display: none; border-left: 3px solid var(--accent); padding: 0 0 6px 14px; margin: 0 0 6px 6px; }
+.provider:has(> label input:checked) .provider-fields { display: block; }
+.ai-common { margin-top: 12px; }
+.ai:has(input[name=backend][value=cli]:checked) .effort-field { display: none; }
+.webfetch-field { display: none !important; }
+.ai:has(input[name=backend][value=anthropic]:checked) .webfetch-field,
+.ai:has(input[name=backend][value=cli]:checked) .webfetch-field { display: flex !important; }
 .danger-zone { margin: 24px 0; border: 1px solid var(--danger); border-radius: 10px; padding: 8px 16px; }
 .danger-zone summary { color: var(--danger); cursor: pointer; }
 .panel { margin: 16px 0; }

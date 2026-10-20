@@ -358,3 +358,16 @@ func ParseTimes(v string) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// Timezones は設定画面のタイムゾーン選択肢（よく使うもの）。
+var Timezones = []string{
+	"Asia/Tokyo", "Asia/Seoul", "Asia/Shanghai", "Asia/Taipei", "Asia/Hong_Kong", "Asia/Singapore",
+	"Asia/Bangkok", "Asia/Jakarta", "Asia/Manila", "Asia/Kolkata", "Asia/Dubai",
+	"Australia/Sydney", "Australia/Melbourne", "Australia/Perth", "Pacific/Auckland", "Pacific/Honolulu",
+	"Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
+	"Europe/Rome", "Europe/Amsterdam", "Europe/Stockholm", "Europe/Helsinki", "Europe/Istanbul", "Europe/Moscow",
+	"Africa/Cairo", "Africa/Johannesburg",
+	"America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage",
+	"America/Toronto", "America/Vancouver", "America/Mexico_City", "America/Sao_Paulo", "America/Buenos_Aires",
+	"UTC",
+}

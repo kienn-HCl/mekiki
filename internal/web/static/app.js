@@ -1,12 +1,3 @@
-// 設定画面: AI連携方式を選ぶと、その方式の設定欄だけを開く
-document.querySelectorAll('input[name="backend"]').forEach(function (radio) {
-  radio.addEventListener("change", function () {
-    document.querySelectorAll("details[data-backend]").forEach(function (d) {
-      d.open = d.dataset.backend === radio.value;
-    });
-  });
-});
-
 // 取得・要約実行中は状態をポーリングし、終わったら再読み込みする
 (function () {
   var busy = document.getElementById("busy");

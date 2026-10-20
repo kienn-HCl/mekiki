@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -853,6 +854,33 @@ type settingsData struct {
 	base
 	S         config.Settings
 	Providers []providerView
+	Timezones []tzOption
+}
+
+type tzOption struct{ Name, Label string }
+
+// timezoneOptions はタイムゾーンの選択肢を現在のUTCとの時差付きで返す。
+// 一覧にないタイムゾーンが設定されていれば先頭に足す。
+func timezoneOptions(current string) []tzOption {
+	names := config.Timezones
+	if !slices.Contains(names, current) {
+		names = append([]string{current}, names...)
+	}
+	now := time.Now()
+	var out []tzOption
+	for _, n := range names {
+		loc, err := time.LoadLocation(n)
+		if err != nil {
+			continue
+		}
+		_, off := now.In(loc).Zone()
+		sign := "+"
+		if off < 0 {
+			sign, off = "-", -off
+		}
+		out = append(out, tzOption{n, fmt.Sprintf("%s（UTC%s%02d:%02d）", n, sign, off/3600, off%3600/60)})
+	}
+	return out
 }
 
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
@@ -861,7 +889,8 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg}
+	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg,
+		Timezones: timezoneOptions(cfg.Timezone)}
 	for _, p := range config.Providers {
 		v := providerView{Provider: p, Model: cfg.Models[p.ID]}
 		switch {

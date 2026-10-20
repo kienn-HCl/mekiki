@@ -177,6 +177,12 @@ func TestSaveGlobalSettings(t *testing.T) {
 	if strings.Contains(body, "sk-or-test-1234567890") {
 		t.Error("APIキーが設定画面に平文で出ている")
 	}
+	for _, want := range []string{`<option value="Asia/Tokyo" selected>`, `class="check webfetch-field"`,
+		`name="model.openrouter" value="openai/gpt-5.1"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("設定画面に %q がない", want)
+		}
+	}
 	form.Del("api_key.openrouter")
 	post(t, ts, "/settings", form)
 	kv, _ = st.Settings(context.Background())
