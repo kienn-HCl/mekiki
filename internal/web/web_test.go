@@ -158,7 +158,8 @@ func post(t *testing.T, ts *httptest.Server, path string, form url.Values) strin
 func TestSaveGlobalSettings(t *testing.T) {
 	ts, st := newServer(t, "")
 	form := url.Values{
-		"backend": {"openrouter"}, "model.openrouter": {"openai/gpt-5.1"}, "effort": {""},
+		"backend": {"openrouter"}, "model.openrouter": {"openai/gpt-5.1"}, "effort.openrouter": {""},
+		"effort.anthropic": {"high"}, "web_fetch.cli": {"1"},
 		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"claude"},
 		"timezone": {"Asia/Tokyo"}, "fetch_interval": {"30"}, "articles_per_feed": {"10"},
 		"max_failures": {"5"}, "failure_retry_hours": {"24"}, "retention_days": {"30"},
@@ -169,7 +170,8 @@ func TestSaveGlobalSettings(t *testing.T) {
 	kv, _ := st.Settings(context.Background())
 	s := config.Load(kv)
 	if s.Backend != "openrouter" || s.Model("openrouter") != "openai/gpt-5.1" ||
-		s.APIKeys["openrouter"] != "sk-or-test-1234567890" || s.Effort != "" || s.WebFetch {
+		s.APIKeys["openrouter"] != "sk-or-test-1234567890" || s.Effort("openrouter") != "" ||
+		s.Effort("anthropic") != "high" || !s.UseWebFetch("cli") || s.UseWebFetch("anthropic") {
 		t.Errorf("保存内容が違う: %+v", s)
 	}
 	// APIキーは画面に平文で出さない。空欄で再保存してもキーは消えない
@@ -177,11 +179,14 @@ func TestSaveGlobalSettings(t *testing.T) {
 	if strings.Contains(body, "sk-or-test-1234567890") {
 		t.Error("APIキーが設定画面に平文で出ている")
 	}
-	for _, want := range []string{`<option value="Asia/Tokyo" selected>`, `class="check webfetch-field"`,
+	for _, want := range []string{`<option value="Asia/Tokyo" selected>`, `name="web_fetch.cli" value="1" checked`, `<option selected>high</option>`,
 		`name="model.openrouter" value="openai/gpt-5.1"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("設定画面に %q がない", want)
 		}
+	}
+	if strings.Contains(body, `name="web_fetch.openrouter"`) {
+		t.Error("WebFetch非対応のAIにチェックが出ている")
 	}
 	form.Del("api_key.openrouter")
 	post(t, ts, "/settings", form)

@@ -94,9 +94,9 @@ OpenAI互換APIは標準ライブラリのHTTPクライアントで直接呼ぶ�
 | APIキー（経路ごと） | 空 | 空なら経路ごとの環境変数。画面には伏せ字で表示し、空欄で保存すると変更しない |
 | モデル（経路ごと） | Anthropicのみ `claude-opus-5-5` | 他の経路は入力必須 |
 | OpenAI互換APIのURL | 空 | `compat` のとき必須（例 `http://localhost:11434/v1`） |
-| effort | `medium` | Anthropicは `output_config.effort`、OpenAI系は `reasoning_effort`（§7.1）。空なら送らない |
+| effort（経路ごと） | Anthropicは `medium`、他は空 | Anthropicは `output_config.effort`、OpenAI系は `reasoning_effort`（§7.1）。空なら送らない。旧版の共通設定 `effort` はAnthropicの値として読む |
 | claudeのパス / モデル | `claude` / 空 | CLI経路。モデル空ならCLIのデフォルト |
-| WebFetch救済 | 有効 | 本文が取れない記事でAIにページ取得を許可するか（§6.3。Anthropic・CLIのみ有効） |
+| WebFetch救済（対応経路ごと） | 有効 | 本文が取れない記事でAIにページ取得を許可するか（§6.3）。Anthropic API・claude -p だけが持つ設定 |
 | タイムゾーン | `Asia/Tokyo` | 「今日」の日付と要約実行時刻の基準 |
 | フィード取得間隔 | 60分 | 0で定期取得しない（5分以上） |
 | 1フィードの取得記事数 | 20 | フィードの先頭からこの件数まで |
@@ -371,8 +371,8 @@ title と link の両方がある記事だけを扱う。
 - 表示上のアプリ名は「mekiki」（左上にアイコン付き）。テンプレート・CSS・JSはバイナリに埋め込む。画像は記事サイトから直接読み込む（`referrerpolicy=no-referrer`）。
   ライト/ダーク両対応、スマートフォン幅でも横スクロールしないレイアウト。
   横並びの入力欄はラベルを短くして補足を下にまとめ、ラベルの行数が違っても入力欄の位置と高さが揃うようにする
-- 全体設定のAI連携は、選んだAIのすぐ下にそのAIの設定欄（APIキー・モデル・URL）だけを開く（CSSの `:has()` で切り替え）。
-  effort はAPI系を選んだときだけ、WebFetch救済のチェックは対応する経路（Anthropic API・claude -p）を選んだときだけ表示する。
+- 全体設定のAI連携は、選んだAIのすぐ下にそのAIの設定欄（APIキー・モデル・URL・effort・対応経路ならWebFetch救済）だけを、
+  高さのアニメーション付きで開く（CSSの `:has()` で切り替え。動きを減らす設定のブラウザではアニメーションしない）。
   タイムゾーンはよく使うものからプルダウンで選ぶ（UTCとの時差付き。一覧にない値が設定済みならそれも選択肢に残す）
 
 ## 10. エラーハンドリング

@@ -55,13 +55,13 @@ func NewBackend(s config.Settings) (ai.Backend, error) {
 	case config.BackendCLI:
 		return ai.NewCLI(s.CLIPath, s.CLIModel)
 	case config.BackendAnthropic:
-		return ai.NewAPI(s.APIKey(s.Backend), s.Model(s.Backend), s.Effort)
+		return ai.NewAPI(s.APIKey(s.Backend), s.Model(s.Backend), s.Effort(s.Backend))
 	}
 	p, ok := config.ProviderByID(s.Backend)
 	if !ok {
 		return nil, errors.New("AI連携方式が不正です: " + s.Backend)
 	}
-	return ai.NewOpenAICompat(p.ID, s.BaseURL(p.ID), s.APIKey(p.ID), s.Model(p.ID), s.Effort, p.KeyOptional)
+	return ai.NewOpenAICompat(p.ID, s.BaseURL(p.ID), s.APIKey(p.ID), s.Model(p.ID), s.Effort(p.ID), p.KeyOptional)
 }
 
 func (a *App) Settings(ctx context.Context) (config.Settings, error) {

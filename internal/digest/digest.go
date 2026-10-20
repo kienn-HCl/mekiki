@@ -413,7 +413,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 		// 本文がほぼ取れない → WebFetch救済（タイトルのみの要約もこのプロンプトが兼ねる）
 		resp, err := j.backend.Complete(ctx, ai.Request{
 			Stage: "summarize_fallback", Prompt: buildFallbackPrompt(a.Title, a.Link),
-			AllowWebFetch: j.cfg.WebFetch && j.cfg.SupportsWebFetch(), Timeout: fallbackTimeout,
+			AllowWebFetch: j.cfg.UseWebFetch(j.cfg.Backend), Timeout: fallbackTimeout,
 		})
 		j.tracker.Record("summarize_fallback", resp.Usage)
 		if err != nil {

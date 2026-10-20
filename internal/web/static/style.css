@@ -172,16 +172,28 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .settings legend { font-weight: 700; padding: 0 6px; }
 .settings .sub { border-left: 3px solid var(--border); padding-left: 12px; margin: 8px 0; }
 .settings .sub summary { cursor: pointer; font-weight: 600; font-size: .95rem; }
-/* AI連携: 選んだAIの設定欄だけを表示する */
-.provider { border-radius: 8px; padding: 2px 10px; margin: 2px -10px; }
+/* AI連携: 選んだAIの設定欄だけを開く（高さ0→内容の高さへアニメーション） */
+.provider { border-radius: 8px; padding: 2px 10px; margin: 2px -10px; transition: background-color .25s; }
 .provider:has(> label input:checked) { background: var(--bg); }
-.provider-fields { display: none; border-left: 3px solid var(--accent); padding: 0 0 6px 14px; margin: 0 0 6px 6px; }
-.provider:has(> label input:checked) .provider-fields { display: block; }
-.ai-common { margin-top: 12px; }
-.ai:has(input[name=backend][value=cli]:checked) .effort-field { display: none; }
-.webfetch-field { display: none !important; }
-.ai:has(input[name=backend][value=anthropic]:checked) .webfetch-field,
-.ai:has(input[name=backend][value=cli]:checked) .webfetch-field { display: flex !important; }
+.provider-fields {
+  display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows .3s ease, opacity .25s ease, visibility 0s linear .3s;
+}
+.provider:has(> label input:checked) .provider-fields {
+  grid-template-rows: 1fr; opacity: 1; visibility: visible;
+  transition: grid-template-rows .3s ease, opacity .25s ease .05s, visibility 0s;
+}
+.provider-inner { overflow: hidden; min-height: 0; }
+.provider-inner > :first-child { margin-top: 4px; }
+/* 余白は開いているときだけ付ける（閉じた行の間隔が広がらないように） */
+.provider-fields .provider-inner {
+  border-left: 3px solid var(--accent); padding: 0 0 0 14px; margin: 0 0 0 6px;
+  transition: padding .3s ease, margin .3s ease;
+}
+.provider:has(> label input:checked) .provider-inner { padding-bottom: 6px; margin-bottom: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .provider-fields, .provider:has(> label input:checked) .provider-fields { transition: none; }
+}
 .danger-zone { margin: 24px 0; border: 1px solid var(--danger); border-radius: 10px; padding: 8px 16px; }
 .danger-zone summary { color: var(--danger); cursor: pointer; }
 .panel { margin: 16px 0; }

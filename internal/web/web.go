@@ -846,6 +846,8 @@ func (s *Server) actionDeleteProfile(w http.ResponseWriter, r *http.Request, p c
 type providerView struct {
 	config.Provider
 	Model     string
+	Effort    string
+	UseFetch  bool
 	KeySource string // 画面で設定済み / 環境変数 XXX / 未設定
 	KeyHint   string
 }
@@ -892,7 +894,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	d := settingsData{base: s.base(r, config.Profile{}, "settings", "全体設定"), S: cfg,
 		Timezones: timezoneOptions(cfg.Timezone)}
 	for _, p := range config.Providers {
-		v := providerView{Provider: p, Model: cfg.Models[p.ID]}
+		v := providerView{Provider: p, Model: cfg.Models[p.ID], Effort: cfg.Effort(p.ID), UseFetch: cfg.UseWebFetch(p.ID)}
 		switch {
 		case cfg.APIKeys[p.ID] != "":
 			v.KeySource, v.KeyHint = "画面で設定済み", maskKey(cfg.APIKeys[p.ID])
@@ -942,10 +944,17 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 		next.Models[p.ID] = strings.TrimSpace(r.FormValue("model." + p.ID))
 	}
 	next.CompatURL = strings.TrimSpace(r.FormValue("compat_url"))
-	next.Effort = r.FormValue("effort")
+
 	next.CLIPath = strings.TrimSpace(r.FormValue("cli_path"))
 	next.CLIModel = strings.TrimSpace(r.FormValue("cli_model"))
-	next.WebFetch = r.FormValue("web_fetch") == "1"
+	next.Efforts = map[string]string{}
+	for _, p := range config.Providers {
+		next.Efforts[p.ID] = r.FormValue("effort." + p.ID)
+	}
+	next.WebFetch = map[string]bool{}
+	for _, id := range config.WebFetchBackends() {
+		next.WebFetch[id] = r.FormValue("web_fetch."+id) == "1"
+	}
 	next.Timezone = strings.TrimSpace(r.FormValue("timezone"))
 	next.FetchInterval = n("fetch_interval", cur.FetchInterval)
 	next.ArticlesPerFeed = n("articles_per_feed", cur.ArticlesPerFeed)

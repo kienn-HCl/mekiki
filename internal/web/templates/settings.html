@@ -5,12 +5,12 @@
 
 <fieldset class="ai">
   <legend>AI連携</legend>
-  <p class="muted small">使うAIを選ぶと、そのAIの設定欄が開きます。APIキーとモデルはAIごとに保存されるので、切り替えても元の設定は残ります。</p>
+  <p class="muted small">使うAIを選ぶと、そのAIの設定欄が開きます。設定はAIごとに保存されるので、切り替えても元の設定は残ります。</p>
   {{range .Providers}}
   <div class="provider">
     <label class="radio"><input type="radio" name="backend" value="{{.ID}}" {{if eq .ID $.S.Backend}}checked{{end}}>{{.Label}}
       <span class="muted small">{{.KeySource}}</span></label>
-    <div class="provider-fields">
+    <div class="provider-fields"><div class="provider-inner">
       {{if eq .ID "compat"}}
       <label>APIのURL（/chat/completions の手前まで）
         <input name="compat_url" value="{{$.S.CompatURL}}" placeholder="http://localhost:11434/v1"></label>
@@ -19,37 +19,34 @@
         <label>APIキー{{if .KeyHint}} <span class="muted small">（{{.KeyHint}}）</span>{{end}}
           <input name="api_key.{{.ID}}" type="password" autocomplete="off" placeholder="{{if .KeyHint}}変更する場合のみ入力{{else}}{{if .KeyOptional}}不要なら空のまま{{else}}未設定{{end}}{{end}}"></label>
         <label>モデル<input name="model.{{.ID}}" value="{{.Model}}" placeholder="{{.ModelHint}}"></label>
+        <label>effort（思考の深さ）
+          <select name="effort.{{.ID}}">
+            <option value="" {{if eq .Effort ""}}selected{{end}}>指定しない（モデルの既定）</option>
+            {{$cur := .Effort}}{{range $e := (list "low" "medium" "high" "xhigh" "max")}}<option {{if eq $e $cur}}selected{{end}}>{{$e}}</option>{{end}}
+          </select></label>
       </div>
-      <p class="muted small">キーを画面で入れない場合は環境変数 <code>{{.KeyEnv}}</code> を使います。</p>
+      <p class="muted small">キーを画面で入れない場合は環境変数 <code>{{.KeyEnv}}</code> を使います。
+      {{if eq .ID "anthropic"}}effort は output_config.effort として送ります。{{else}}effort は reasoning_effort として送り（xhigh / max は high）、モデルが対応していなければ外して再送します。{{end}}</p>
       {{if eq .KeySource "画面で設定済み"}}
       <label class="check"><input type="checkbox" name="api_key_clear.{{.ID}}" value="1">画面で設定したキーを削除する</label>
       {{end}}
-    </div>
+      {{if .WebFetch}}
+      <label class="check"><input type="checkbox" name="web_fetch.{{.ID}}" value="1" {{if .UseFetch}}checked{{end}}>本文を取得できない記事は、AIにWebページを取得させて要約する</label>
+      {{end}}
+    </div></div>
   </div>
   {{end}}
   <div class="provider">
     <label class="radio"><input type="radio" name="backend" value="cli" {{if eq .S.Backend "cli"}}checked{{end}}>claude -p（Claude Code CLI）
       <span class="muted small">サーバでログイン済みのClaude Codeのサブスクリプション枠で動く</span></label>
-    <div class="provider-fields">
+    <div class="provider-fields"><div class="provider-inner">
       <div class="grid">
         <label>claude コマンドのパス<input name="cli_path" value="{{.S.CLIPath}}"></label>
         <label>モデル（--model）<input name="cli_model" value="{{.S.CLIModel}}" placeholder="空ならCLIのデフォルト"></label>
       </div>
       <p class="muted small">mekikiを動かすユーザーで、サーバ上で一度 <code>claude</code> を起動してログインしておいてください。</p>
-    </div>
-  </div>
-
-  <div class="ai-common">
-    <div class="effort-field">
-      <label>effort（思考の深さ）
-        <select name="effort">
-          <option value="" {{if eq .S.Effort ""}}selected{{end}}>指定しない（モデルの既定）</option>
-          {{range $e := (list "low" "medium" "high" "xhigh" "max")}}<option {{if eq $e $.S.Effort}}selected{{end}}>{{$e}}</option>{{end}}
-        </select></label>
-      <p class="muted small">Anthropicは output_config.effort、OpenAI系は reasoning_effort として送ります（xhigh / max は high）。モデルが対応していなければ外して再送します。</p>
-    </div>
-    <label class="check webfetch-field"><input type="checkbox" name="web_fetch" value="1" {{if .S.WebFetch}}checked{{end}}>
-      本文を取得できない記事は、AIにWebページを取得させて要約する</label>
+      <label class="check"><input type="checkbox" name="web_fetch.cli" value="1" {{if index .S.WebFetch "cli"}}checked{{end}}>本文を取得できない記事は、AIにWebページを取得させて要約する</label>
+    </div></div>
   </div>
 </fieldset>
 

@@ -26,7 +26,8 @@ func TestRoundTrip(t *testing.T) {
 	s.Backend = BackendOpenRouter
 	s.APIKeys[BackendOpenRouter] = "sk-or-xxx"
 	s.Models[BackendOpenRouter] = "openai/gpt-5.1"
-	s.WebFetch = false
+	s.WebFetch[BackendAnthropic] = false
+	s.Efforts[BackendOpenAI] = "low"
 	got := Load(s.Map())
 	if fmt.Sprint(got) != fmt.Sprint(s) {
 		t.Errorf("round trip mismatch:\n got %+v\nwant %+v", got, s)
@@ -102,5 +103,19 @@ func TestProfileValidate(t *testing.T) {
 	p.DiscordWebhook = "http://insecure"
 	if p.Validate() == nil {
 		t.Error("httpのWebhookが通る")
+	}
+}
+
+func TestLegacyEffortAndWebFetch(t *testing.T) {
+	s := Load(map[string]string{"effort": "high", "web_fetch": "0"})
+	if s.Effort(BackendAnthropic) != "high" || s.Effort(BackendOpenAI) != "" {
+		t.Errorf("旧effort: anthropic=%q openai=%q", s.Effort(BackendAnthropic), s.Effort(BackendOpenAI))
+	}
+	if s.UseWebFetch(BackendAnthropic) || s.UseWebFetch(BackendCLI) {
+		t.Error("旧web_fetch=0 が引き継がれていない")
+	}
+	d := Load(map[string]string{})
+	if !d.UseWebFetch(BackendAnthropic) || d.UseWebFetch(BackendOpenAI) || d.Effort(BackendAnthropic) != "medium" {
+		t.Errorf("既定値: %+v", d)
 	}
 }

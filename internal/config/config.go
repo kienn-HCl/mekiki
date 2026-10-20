@@ -34,11 +34,15 @@ type Provider struct {
 	DefaultModel string
 	ModelHint    string // 画面のplaceholder
 	KeyOptional  bool   // ローカルLLM等、キー不要のことがある
+	// DefaultEffort はeffortの既定値。OpenAI系は推論モデル以外が reasoning_effort を受け付けないため既定では送らない
+	DefaultEffort string
+	// WebFetch はAIにWebページを取得させる救済（§6.3）に対応するか
+	WebFetch bool
 }
 
 var Providers = []Provider{
 	{ID: BackendAnthropic, Label: "Anthropic API", KeyEnv: "ANTHROPIC_API_KEY",
-		DefaultModel: "claude-opus-5-5", ModelHint: "claude-opus-5-5"},
+		DefaultModel: "claude-opus-5-5", ModelHint: "claude-opus-5-5", DefaultEffort: "medium", WebFetch: true},
 	{ID: BackendOpenAI, Label: "OpenAI", BaseURL: "https://api.openai.com/v1", KeyEnv: "OPENAI_API_KEY",
 		ModelHint: "例: gpt-5.1"},
 	{ID: BackendGemini, Label: "Google Gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -64,15 +68,15 @@ const DefaultCriteria = `- 幅広いカテゴリから選ぶようにしてく�
 
 // Settings はサーバ全体の設定。
 type Settings struct {
-	// AI
+	// AI（キー・モデル・effort・WebFetchは経路ごとに保存し、切り替えても残す）
 	Backend   string            // 経路（Backend* 定数）
 	APIKeys   map[string]string // 経路ごとのAPIキー（空なら環境変数）
 	Models    map[string]string // 経路ごとのモデル名
+	Efforts   map[string]string // 経路ごとのeffort。Anthropic: output_config.effort / OpenAI系: reasoning_effort（空なら送らない）
+	WebFetch  map[string]bool   // 経路ごとに、本文が取れない記事でAIにWebページを取得させるか（対応経路のみ）
 	CompatURL string            // BackendCompat のエンドポイント（例 http://localhost:11434/v1）
-	Effort    string            // Anthropic: output_config.effort / OpenAI系: reasoning_effort（空なら送らない）
 	CLIPath   string            // cli用: claude コマンド
 	CLIModel  string            // cli用: --model（空ならCLIのデフォルト）
-	WebFetch  bool              // 本文が取れない記事でAIにWebページを取得させるか（Anthropic・CLIのみ）
 
 	// 全体
 	Timezone string
@@ -86,13 +90,13 @@ type Settings struct {
 }
 
 func Defaults() Settings {
-	return Settings{
+	s := Settings{
 		Backend:           BackendAnthropic,
 		APIKeys:           map[string]string{},
 		Models:            map[string]string{},
-		Effort:            "medium",
+		Efforts:           map[string]string{},
+		WebFetch:          map[string]bool{},
 		CLIPath:           "claude",
-		WebFetch:          true,
 		Timezone:          "Asia/Tokyo",
 		FetchInterval:     60,
 		ArticlesPerFeed:   20,
@@ -100,6 +104,13 @@ func Defaults() Settings {
 		FailureRetryHours: 168,
 		RetentionDays:     30,
 	}
+	for _, p := range Providers {
+		s.Efforts[p.ID] = p.DefaultEffort
+	}
+	for _, id := range WebFetchBackends() {
+		s.WebFetch[id] = true
+	}
+	return s
 }
 
 func parseInt(kv map[string]string, key string, dst *int) {
@@ -142,12 +153,22 @@ func Load(kv map[string]string) Settings {
 		if v := kv["model."+p.ID]; v != "" {
 			s.Models[p.ID] = v
 		}
+		s.Efforts[p.ID] = p.DefaultEffort
+		if v, ok := kv["effort."+p.ID]; ok {
+			s.Efforts[p.ID] = v
+		} else if v, ok := kv["effort"]; ok && p.ID == BackendAnthropic { // 旧版の共通設定
+			s.Efforts[p.ID] = v
+		}
+	}
+	for _, id := range WebFetchBackends() {
+		on := true
+		parseBool(kv, "web_fetch", &on) // 旧版の共通設定
+		parseBool(kv, "web_fetch."+id, &on)
+		s.WebFetch[id] = on
 	}
 	str("compat_url", &s.CompatURL)
-	str("effort", &s.Effort)
 	str("cli_path", &s.CLIPath)
 	str("cli_model", &s.CLIModel)
-	parseBool(kv, "web_fetch", &s.WebFetch)
 	str("timezone", &s.Timezone)
 	parseInt(kv, "fetch_interval", &s.FetchInterval)
 	parseInt(kv, "articles_per_feed", &s.ArticlesPerFeed)
@@ -162,10 +183,8 @@ func (s Settings) Map() map[string]string {
 	m := map[string]string{
 		"backend":             s.Backend,
 		"compat_url":          s.CompatURL,
-		"effort":              s.Effort,
 		"cli_path":            s.CLIPath,
 		"cli_model":           s.CLIModel,
-		"web_fetch":           boolStr(s.WebFetch),
 		"timezone":            s.Timezone,
 		"fetch_interval":      strconv.Itoa(s.FetchInterval),
 		"articles_per_feed":   strconv.Itoa(s.ArticlesPerFeed),
@@ -176,6 +195,10 @@ func (s Settings) Map() map[string]string {
 	for _, p := range Providers {
 		m["api_key."+p.ID] = s.APIKeys[p.ID]
 		m["model."+p.ID] = s.Models[p.ID]
+		m["effort."+p.ID] = s.Efforts[p.ID]
+	}
+	for _, id := range WebFetchBackends() {
+		m["web_fetch."+id] = boolStr(s.WebFetch[id])
 	}
 	return m
 }
@@ -185,10 +208,12 @@ func (s Settings) Validate() error {
 	if _, ok := ProviderByID(s.Backend); !ok && s.Backend != BackendCLI {
 		return fmt.Errorf("AI連携方式が不正です: %q", s.Backend)
 	}
-	switch s.Effort {
-	case "", "low", "medium", "high", "xhigh", "max":
-	default:
-		return fmt.Errorf("effortが不正です: %q", s.Effort)
+	for id, e := range s.Efforts {
+		switch e {
+		case "", "low", "medium", "high", "xhigh", "max":
+		default:
+			return fmt.Errorf("%sのeffortが不正です: %q", id, e)
+		}
 	}
 	if p, ok := ProviderByID(s.Backend); ok && s.Model(p.ID) == "" {
 		return fmt.Errorf("%sのモデル名を指定してください", p.Label)
@@ -259,10 +284,22 @@ func (s Settings) BaseURL(backend string) string {
 	return p.BaseURL
 }
 
-// SupportsWebFetch はその経路でAIにWebページを取得させられるか。
-func (s Settings) SupportsWebFetch() bool {
-	return s.Backend == BackendAnthropic || s.Backend == BackendCLI
+// WebFetchBackends はAIにWebページを取得させる救済に対応する経路。
+func WebFetchBackends() []string {
+	out := []string{BackendCLI}
+	for _, p := range Providers {
+		if p.WebFetch {
+			out = append(out, p.ID)
+		}
+	}
+	return out
 }
+
+// Effort は経路のeffort（空なら送らない）。
+func (s Settings) Effort(backend string) string { return s.Efforts[backend] }
+
+// UseWebFetch はその経路でWebFetch救済を使うか（非対応の経路では常にfalse）。
+func (s Settings) UseWebFetch(backend string) bool { return s.WebFetch[backend] }
 
 func (s Settings) Location() *time.Location {
 	loc, err := time.LoadLocation(s.Timezone)
