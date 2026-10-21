@@ -19,9 +19,12 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 
 ## セットアップ
 
-### 1. ビルド
+### 1. 入手・ビルド
 
-Go 1.26以上:
+[Releases](https://github.com/kienn-HCl/mekiki/releases) から、使うOS・CPU向けのアーカイブ
+（linux / darwin の amd64・arm64、windows amd64）をダウンロードして展開する。中身はバイナリ1つと README・設定例。
+
+自分でビルドする場合は Go 1.26以上:
 
 ```sh
 CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki
@@ -132,6 +135,10 @@ sudo systemctl enable --now mekiki
 （`sudo -u mekiki -H claude`。認証情報は `/var/lib/mekiki/.claude` に保存される）。
 
 ## 開発
+
+リリース: `v1.2.3` のようなタグをpushすると、GitHub Actions（`.github/workflows/release.yml`）がテストを通してから
+各OS向けのバイナリをビルドし、Releaseに添付する（`SHA256SUMS` 付き）。
+
 
 ```sh
 nix develop      # go・gopls・claude-code
