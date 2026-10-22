@@ -1,4 +1,4 @@
-# mekiki
+# <img src="internal/web/static/icon.svg" alt="" width="32" height="32"> mekiki
 
 RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約した「今日のページ」を作るWebアプリ。
 サーバで常駐させ、ブラウザから見る。
