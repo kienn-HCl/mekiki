@@ -25,11 +25,11 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 
 <img src="docs/screenshots/today.png" alt="今日のページ" width="49%"> <img src="docs/screenshots/today-dark.png" alt="今日のページ（ダークモード）" width="49%">
 
-**RSSリーダー** と **プロファイル**（並べ替えて先頭を既定にできる）
+**RSSリーダー** と **プロファイル**
 
 <img src="docs/screenshots/articles.png" alt="RSSリーダー" width="49%"> <img src="docs/screenshots/profiles.png" alt="プロファイル一覧" width="49%">
 
-**AI連携の設定**（選んだAIの設定欄が開く） と **スマホ表示**
+**AI連携の設定** と **スマホ表示**
 
 <img src="docs/screenshots/settings.png" alt="AI連携の設定" width="68%"> <img src="docs/screenshots/mobile.png" alt="スマホ表示" width="22%">
 
