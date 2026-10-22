@@ -17,6 +17,22 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 - **Discord投稿（任意）**: プロファイルにWebhook URLを設定すると、追加された記事をDiscordにも投稿する
 - 設定・フィード管理はすべてWeb画面で行う。単一の静的リンクバイナリで、データはSQLiteファイル1つ
 
+## スクリーンショット
+
+（記事・フィードはすべて架空のデモデータ）
+
+**今日のページ** — AIが選んだ記事の要約と「今日のまとめ」。ダークモードにも対応
+
+<img src="docs/screenshots/today.png" alt="今日のページ" width="49%"> <img src="docs/screenshots/today-dark.png" alt="今日のページ（ダークモード）" width="49%">
+
+**RSSリーダー** と **プロファイル**（並べ替えて先頭を既定にできる）
+
+<img src="docs/screenshots/articles.png" alt="RSSリーダー" width="49%"> <img src="docs/screenshots/profiles.png" alt="プロファイル一覧" width="49%">
+
+**AI連携の設定**（選んだAIの設定欄が開く） と **スマホ表示**
+
+<img src="docs/screenshots/settings.png" alt="AI連携の設定" width="68%"> <img src="docs/screenshots/mobile.png" alt="スマホ表示" width="22%">
+
 ## セットアップ
 
 ### 1. 入手・ビルド
