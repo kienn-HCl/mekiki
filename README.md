@@ -1,4 +1,4 @@
-# mekiki
+# <img src="internal/web/static/icon.svg" alt="" width="32" height="32"> mekiki
 
 RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約した「今日のページ」を作るWebアプリ。
 サーバで常駐させ、ブラウザから見る。
@@ -16,6 +16,22 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
   - `claude -p`（Claude Code CLI。サブスクリプション枠）
 - **Discord投稿（任意）**: プロファイルにWebhook URLを設定すると、追加された記事をDiscordにも投稿する
 - 設定・フィード管理はすべてWeb画面で行う。単一の静的リンクバイナリで、データはSQLiteファイル1つ
+
+## スクリーンショット
+
+（記事・フィードはすべて架空のデモデータ）
+
+**今日のページ** — AIが選んだ記事の要約と「今日のまとめ」。ダークモードにも対応
+
+<img src="docs/screenshots/today.png" alt="今日のページ" width="49%"> <img src="docs/screenshots/today-dark.png" alt="今日のページ（ダークモード）" width="49%">
+
+**RSSリーダー** と **プロファイル**
+
+<img src="docs/screenshots/articles.png" alt="RSSリーダー" width="49%"> <img src="docs/screenshots/profiles.png" alt="プロファイル一覧" width="49%">
+
+**AI連携の設定** と **スマホ表示**
+
+<img src="docs/screenshots/settings.png" alt="AI連携の設定" width="68%"> <img src="docs/screenshots/mobile.png" alt="スマホ表示" width="22%">
 
 ## セットアップ
 
