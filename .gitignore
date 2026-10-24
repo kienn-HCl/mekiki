@@ -1,4 +1,6 @@
 /mekiki
+/build/
+/dist/
 /data/
 result
 result-*

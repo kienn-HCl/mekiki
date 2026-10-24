@@ -43,7 +43,7 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 自分でビルドする場合は Go 1.26以上:
 
 ```sh
-CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki
+make          # → ./mekiki（make を使わないなら CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki）
 ```
 
 またはNix:
@@ -153,8 +153,9 @@ sudo systemctl enable --now mekiki
 ## 開発
 
 リリース: `v1.2.3` のようなタグをpushすると、GitHub Actions（`.github/workflows/release.yml`）がテストを通してから
-各OS向けのバイナリをビルドし、Releaseに添付する（`SHA256SUMS` 付き）。
-
+各OS向けのバイナリをビルドし、Releaseに添付する（`SHA256SUMS` 付き）。ビルド手順は `Makefile` にあり、
+Actionsが呼ぶのと同じ `make dist` で手元でも全OS向けのアーカイブを `dist/` に作れる
+（`make dist TARGETS=linux/amd64` で一部だけ）。
 
 ```sh
 nix develop      # go・gopls・claude-code
