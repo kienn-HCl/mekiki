@@ -1,5 +1,3 @@
-# タグ（v1.2.3 など）をpushすると、テストを通してから各OS向けのバイナリをビルドし、
-# GitHub Releaseに添付する。手動実行（workflow_dispatch）では既存のタグを指定して作り直せる。
 name: release
 
 on:
@@ -29,7 +27,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # テスト・クロスビルド・アーカイブ作成は Makefile にまとめてある（手元でも同じく make dist で再現できる）
       - name: テストとビルド
         run: make dist VERSION="$TAG"
 

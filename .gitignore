@@ -5,5 +5,3 @@
 result
 result-*
 env
-feeds/*.opml
-!feeds/example.opml

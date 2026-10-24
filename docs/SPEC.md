@@ -442,10 +442,10 @@ mekiki/
 │   ├── discord/              # Discord Webhook投稿
 │   ├── app/                  # ジョブの排他・スケジューラ
 │   └── web/                  # HTTPハンドラ、templates/・static/（埋め込み）
-├── deploy/mekiki.service     # systemdユニットの例
-├── feeds/example.opml        # OPMLの形式サンプル
+├── deploy/                  # systemdユニット・環境変数の例
+├── docs/                    # 仕様書（このファイル）・スクリーンショット
+├── Makefile                 # ビルド・テスト・配布物作成
 ├── flake.nix
-├── SPEC.md
 └── README.md
 ```
 

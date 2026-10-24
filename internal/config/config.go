@@ -1,8 +1,8 @@
-// Package config はWeb画面から編集する設定の型・デフォルト値・検証を持つ。
+// Package config は設定の型・デフォルト値・検証を持つ。
 //
 // 設定は2種類ある:
-//   - Settings: サーバ全体の設定（AI連携・フィード取得・タイムゾーン）。settingsテーブル
-//   - Profile:  プロファイルごとの設定（選定基準・興味・実行時刻・Discord）。profilesテーブル
+//   - Settings: サーバ全体の設定（AI連携・フィード取得・タイムゾーン）
+//   - Profile:  プロファイルごとの設定（選定基準・興味・実行時刻・Discord）
 package config
 
 import (
@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// AI連携の経路
 const (
 	BackendAnthropic  = "anthropic"  // Anthropic API（デフォルト）
 	BackendOpenAI     = "openai"     // OpenAI API
