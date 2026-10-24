@@ -441,7 +441,7 @@ mekiki/
 │   ├── discord/              # Discord Webhook投稿
 │   ├── app/                  # ジョブの排他・スケジューラ
 │   └── web/                  # HTTPハンドラ、templates/・static/（埋め込み）
-├── deploy/                  # systemdユニット・環境変数の例
+├── deploy/                  # systemdユニット・環境変数・OPMLの例
 ├── docs/                    # 仕様書（このファイル）・スクリーンショット
 ├── Makefile                 # ビルド・テスト・配布物作成
 ├── flake.nix
