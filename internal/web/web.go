@@ -409,15 +409,80 @@ func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, p config.Prof
 }
 
 func (s *Server) archive(w http.ResponseWriter, r *http.Request, p config.Profile) {
-	pages, err := s.App.Store.Pages(r.Context(), p.ID)
+	all, err := s.App.Store.Pages(r.Context(), p.ID)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
+	b := s.base(r, p, "archive", p.Name+" アーカイブ")
+	month := r.URL.Query().Get("month")
+	if _, err := time.Parse("2006-01", month); err != nil {
+		month = b.Today[:7]
+		if len(all) > 0 {
+			month = all[0].Date[:7]
+		}
+	}
+	var pages []store.Page
+	for _, pg := range all {
+		if pg.Date[:7] == month {
+			pages = append(pages, pg)
+		}
+	}
 	s.render(w, "archive", struct {
 		base
+		Cal   calendar
 		Pages []store.Page
-	}{s.base(r, p, "archive", p.Name+" アーカイブ"), pages})
+	}{b, buildCalendar(month, all, b.Today), pages})
+}
+
+type calDay struct {
+	Date    string
+	Day     int
+	Count   int
+	Has     bool
+	IsToday bool
+}
+
+type calendar struct {
+	Month, Label string
+	Prev, Next   string     // 移動できない方向は空
+	Weeks        [][]calDay // 日曜始まり。月の外の日は Day が 0
+}
+
+// buildCalendar は month（"2006-01"）の月のカレンダーを作る。pages は新しい順。
+// 前後の月へは、最も古いページの月から今月（またはそれより新しいページの月）までの範囲で移動できる。
+func buildCalendar(month string, pages []store.Page, today string) calendar {
+	first, _ := time.Parse("2006-01", month)
+	counts := map[string]int{}
+	for _, pg := range pages {
+		counts[pg.Date] = pg.ItemCount
+	}
+	c := calendar{Month: month, Label: fmt.Sprintf("%d年%d月", first.Year(), first.Month())}
+	oldest, newest := today[:7], today[:7]
+	if len(pages) > 0 {
+		oldest = min(oldest, pages[len(pages)-1].Date[:7])
+		newest = max(newest, pages[0].Date[:7])
+	}
+	if prev := first.AddDate(0, -1, 0).Format("2006-01"); prev >= oldest {
+		c.Prev = prev
+	}
+	if next := first.AddDate(0, 1, 0).Format("2006-01"); next <= newest {
+		c.Next = next
+	}
+	week := make([]calDay, int(first.Weekday()))
+	for d := first; d.Month() == first.Month(); d = d.AddDate(0, 0, 1) {
+		date := d.Format("2006-01-02")
+		n, ok := counts[date]
+		week = append(week, calDay{Date: date, Day: d.Day(), Count: n, Has: ok, IsToday: date == today})
+		if len(week) == 7 {
+			c.Weeks = append(c.Weeks, week)
+			week = nil
+		}
+	}
+	if len(week) > 0 {
+		c.Weeks = append(c.Weeks, append(week, make([]calDay, 7-len(week))...))
+	}
+	return c
 }
 
 // ---- RSSリーダー ----
