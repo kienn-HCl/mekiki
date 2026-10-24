@@ -1,6 +1,23 @@
 {{define "content"}}
 <h1>{{.Profile.Name}} アーカイブ</h1>
-{{if not .Pages}}<p class="muted">まだページがありません。</p>{{end}}
+<div class="archive-wrap">
+<nav class="cal" aria-label="カレンダー">
+  <div class="cal-head">
+    {{if .Cal.Prev}}<a href="?month={{.Cal.Prev}}" aria-label="前の月">‹</a>{{else}}<span></span>{{end}}
+    <strong>{{.Cal.Label}}</strong>
+    {{if .Cal.Next}}<a href="?month={{.Cal.Next}}" aria-label="次の月">›</a>{{else}}<span></span>{{end}}
+  </div>
+  <table>
+    <thead><tr><th class="sun">日</th><th>月</th><th>火</th><th>水</th><th>木</th><th>金</th><th class="sat">土</th></tr></thead>
+    <tbody>
+    {{range .Cal.Weeks}}<tr>
+      {{range .}}<td>{{if .Day}}{{if or .Has .IsToday}}<a class="{{if .Has}}has{{end}}{{if .IsToday}} today{{end}}" href="{{$.Prefix}}/{{if not .IsToday}}day/{{.Date}}{{end}}"{{if .Has}} title="{{.Count}}件"{{end}}>{{.Day}}</a>{{else}}<span>{{.Day}}</span>{{end}}{{end}}</td>{{end}}
+    </tr>{{end}}
+    </tbody>
+  </table>
+</nav>
+<section>
+{{if not .Pages}}<p class="muted">{{.Cal.Label}}のページはありません。</p>{{end}}
 <ul class="archive">
 {{range .Pages}}
   <li>
@@ -10,4 +27,6 @@
   </li>
 {{end}}
 </ul>
+</section>
+</div>
 {{end}}

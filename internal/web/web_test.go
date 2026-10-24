@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -445,5 +446,50 @@ func TestConfigFileBackupAndRestore(t *testing.T) {
 	// 設定に関係ない操作（要約実行・既読など）は止めない
 	if loc := post(t, ts, "/p/main/articles/read", url.Values{}); strings.Contains(loc, "err=") {
 		t.Errorf("既読操作まで止まった: %s", loc)
+	}
+}
+
+func TestBuildCalendar(t *testing.T) {
+	pages := []store.Page{{Date: "2026-10-20", ItemCount: 5}, {Date: "2026-09-30", ItemCount: 2}}
+	c := buildCalendar("2026-10", pages, "2026-10-22")
+	if c.Label != "2026年10月" || c.Prev != "2026-09" || c.Next != "" {
+		t.Errorf("見出し・前後: %+v", c)
+	}
+	// 2026-10-01 は木曜
+	if len(c.Weeks) != 5 || c.Weeks[0][3].Day != 0 || c.Weeks[0][4].Day != 1 {
+		t.Errorf("週の並び: %+v", c.Weeks[0])
+	}
+	var has, today []int
+	for _, w := range c.Weeks {
+		if len(w) != 7 {
+			t.Fatalf("週が7日でない: %d", len(w))
+		}
+		for _, d := range w {
+			if d.Has {
+				has = append(has, d.Day)
+			}
+			if d.IsToday {
+				today = append(today, d.Day)
+			}
+		}
+	}
+	if fmt.Sprint(has) != "[20]" || fmt.Sprint(today) != "[22]" {
+		t.Errorf("ページのある日 %v・今日 %v", has, today)
+	}
+	if c := buildCalendar("2026-09", pages, "2026-10-22"); c.Prev != "" || c.Next != "2026-10" {
+		t.Errorf("最も古い月: prev=%q next=%q", c.Prev, c.Next)
+	}
+}
+
+func TestArchiveMonth(t *testing.T) {
+	ts, st := newServer(t, "")
+	date := seed(t, st)
+	_, body := get(t, ts, "/p/main/archive")
+	if !strings.Contains(body, `class="cal"`) || !strings.Contains(body, fmtDate(date)) {
+		t.Errorf("今月のアーカイブ: %.500s", body)
+	}
+	_, body = get(t, ts, "/p/main/archive?month=2001-01")
+	if !strings.Contains(body, "2001年1月のページはありません") || strings.Contains(body, fmtDate(date)) {
+		t.Errorf("ページのない月: %.500s", body)
 	}
 }
