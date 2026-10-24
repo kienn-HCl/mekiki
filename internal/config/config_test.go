@@ -40,12 +40,6 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLegacyBackendName(t *testing.T) {
-	if got := Load(map[string]string{"backend": "api"}); got.Backend != BackendAnthropic {
-		t.Errorf("旧名 api が anthropic にならない: %q", got.Backend)
-	}
-}
-
 func TestProviderResolution(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "env-key")
 	s := Defaults()
@@ -106,14 +100,7 @@ func TestProfileValidate(t *testing.T) {
 	}
 }
 
-func TestLegacyEffortAndWebFetch(t *testing.T) {
-	s := Load(map[string]string{"effort": "high", "web_fetch": "0"})
-	if s.Effort(BackendAnthropic) != "high" || s.Effort(BackendOpenAI) != "" {
-		t.Errorf("旧effort: anthropic=%q openai=%q", s.Effort(BackendAnthropic), s.Effort(BackendOpenAI))
-	}
-	if s.UseWebFetch(BackendAnthropic) || s.UseWebFetch(BackendCLI) {
-		t.Error("旧web_fetch=0 が引き継がれていない")
-	}
+func TestEffortAndWebFetchDefaults(t *testing.T) {
 	d := Load(map[string]string{})
 	if !d.UseWebFetch(BackendAnthropic) || d.UseWebFetch(BackendOpenAI) || d.Effort(BackendAnthropic) != "medium" {
 		t.Errorf("既定値: %+v", d)

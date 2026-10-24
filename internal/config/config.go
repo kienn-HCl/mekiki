@@ -142,9 +142,6 @@ func Load(kv map[string]string) Settings {
 		}
 	}
 	str("backend", &s.Backend)
-	if s.Backend == "api" { // 旧名
-		s.Backend = BackendAnthropic
-	}
 	for _, p := range Providers {
 		if v := kv["api_key."+p.ID]; v != "" {
 			s.APIKeys[p.ID] = v
@@ -155,13 +152,10 @@ func Load(kv map[string]string) Settings {
 		s.Efforts[p.ID] = p.DefaultEffort
 		if v, ok := kv["effort."+p.ID]; ok {
 			s.Efforts[p.ID] = v
-		} else if v, ok := kv["effort"]; ok && p.ID == BackendAnthropic { // 旧版の共通設定
-			s.Efforts[p.ID] = v
 		}
 	}
 	for _, id := range WebFetchBackends() {
 		on := true
-		parseBool(kv, "web_fetch", &on) // 旧版の共通設定
 		parseBool(kv, "web_fetch."+id, &on)
 		s.WebFetch[id] = on
 	}
