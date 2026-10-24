@@ -1,7 +1,7 @@
 /mekiki
+/build/
+/dist/
 /data/
 result
 result-*
 env
-feeds/*.opml
-!feeds/example.opml

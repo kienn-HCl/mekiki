@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- フィード一覧の形式サンプル。第1階層のoutlineがカテゴリ、その子がフィード。
-     Web画面の「フィード」→「OPML」からインポートするか、`mekiki import-opml FILE` で登録する。
-     実データ（feeds/*.opml）は個人の購読リストのためgit管理外。 -->
+<!-- 第1階層のoutlineがカテゴリ、その子がフィード。
+     Web画面の「フィード」からインポートするか、`mekiki import-opml FILE` で登録する。 -->
 <opml version="2.0">
   <head>
     <title>mekiki feeds example</title>

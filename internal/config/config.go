@@ -1,8 +1,8 @@
-// Package config はWeb画面から編集する設定の型・デフォルト値・検証を持つ。
+// Package config は設定の型・デフォルト値・検証を持つ。
 //
 // 設定は2種類ある:
-//   - Settings: サーバ全体の設定（AI連携・フィード取得・タイムゾーン）。settingsテーブル
-//   - Profile:  プロファイルごとの設定（選定基準・興味・実行時刻・Discord）。profilesテーブル
+//   - Settings: サーバ全体の設定（AI連携・フィード取得・タイムゾーン）
+//   - Profile:  プロファイルごとの設定（選定基準・興味・実行時刻・Discord）
 package config
 
 import (
@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// AI連携の経路
 const (
 	BackendAnthropic  = "anthropic"  // Anthropic API（デフォルト）
 	BackendOpenAI     = "openai"     // OpenAI API
@@ -143,9 +142,6 @@ func Load(kv map[string]string) Settings {
 		}
 	}
 	str("backend", &s.Backend)
-	if s.Backend == "api" { // 旧名
-		s.Backend = BackendAnthropic
-	}
 	for _, p := range Providers {
 		if v := kv["api_key."+p.ID]; v != "" {
 			s.APIKeys[p.ID] = v
@@ -156,13 +152,10 @@ func Load(kv map[string]string) Settings {
 		s.Efforts[p.ID] = p.DefaultEffort
 		if v, ok := kv["effort."+p.ID]; ok {
 			s.Efforts[p.ID] = v
-		} else if v, ok := kv["effort"]; ok && p.ID == BackendAnthropic { // 旧版の共通設定
-			s.Efforts[p.ID] = v
 		}
 	}
 	for _, id := range WebFetchBackends() {
 		on := true
-		parseBool(kv, "web_fetch", &on) // 旧版の共通設定
 		parseBool(kv, "web_fetch."+id, &on)
 		s.WebFetch[id] = on
 	}

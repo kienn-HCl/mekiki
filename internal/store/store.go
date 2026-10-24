@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/config"
 )
 
-// schemaVersion はスキーマの版。旧版（プロファイル導入前）のDBは自動で移行する
 const schemaVersion = 2
 
 const schema = `
@@ -167,150 +165,14 @@ func (s *Store) initSchema() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version >= schemaVersion {
-		_, err := s.db.Exec(schema)
-		return err
-	}
-	var oldTables int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'feeds'`).Scan(&oldTables); err != nil {
-		return err
-	}
-	if oldTables > 0 {
-		if err := s.migrateV1(); err != nil {
-			return fmt.Errorf("旧版データベースの移行に失敗: %w", err)
-		}
-		return nil
+	if version != 0 && version != schemaVersion {
+		return fmt.Errorf("対応していないデータベースの版です（%d）", version)
 	}
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("スキーマ作成に失敗: %w", err)
 	}
 	_, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
 	return err
-}
-
-// migrateV1 はプロファイル導入前のDBを移行する。既存のフィード・ページ・履歴は
-// 「main」プロファイルに入れ、旧設定のうちプロファイル単位になった項目をそこへ移す。
-func (s *Store) migrateV1() error {
-	// テーブルの付け替え中に外部キーの参照先が書き換わらないよう、一時的に無効化する
-	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON`); err != nil {
-		return err
-	}
-	defer s.db.Exec(`PRAGMA legacy_alter_table = OFF; PRAGMA foreign_keys = ON`)
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, t := range []string{"feeds", "pages", "page_items", "runs"} {
-		if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME TO %s_v1`, t, t)); err != nil {
-			return err
-		}
-	}
-	for _, idx := range []string{"idx_items_date", "idx_items_norm", "idx_runs_date"} {
-		if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + idx); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(schema); err != nil {
-		return err
-	}
-
-	kv := map[string]string{}
-	rows, err := tx.Query(`SELECT key, value FROM settings`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			rows.Close()
-			return err
-		}
-		kv[k] = v
-	}
-	rows.Close()
-	p := config.DefaultProfile("main", "メイン")
-	str := func(k string, dst *string) {
-		if v, ok := kv[k]; ok {
-			*dst = v
-		}
-	}
-	num := func(k string, dst *int) {
-		if v, err := strconv.Atoi(kv[k]); err == nil {
-			*dst = v
-		}
-	}
-	str("select_criteria", &p.SelectCriteria)
-	str("user_memory", &p.UserMemory)
-	num("pick_count", &p.PickCount)
-	num("hours_back", &p.HoursBack)
-	if v, ok := kv["overview"]; ok {
-		p.Overview = v == "1"
-	}
-	if v, ok := kv["digest_times"]; ok {
-		p.DigestTimes, _ = config.ParseTimes(v)
-	}
-	str("discord_webhook", &p.DiscordWebhook)
-	num("discord_embeds", &p.DiscordEmbeds)
-	str("discord_title", &p.DiscordTitle)
-	num("discord_color", &p.DiscordColor)
-	str("discord_base_url", &p.DiscordBaseURL)
-	if v, ok := kv["discord_after_fail"]; ok {
-		p.DiscordAfterFail = v == "1"
-	}
-	// 旧版のAPIキー・モデルはAnthropic経路のものだった
-	if v := kv["api_key"]; v != "" {
-		kv["api_key."+config.BackendAnthropic] = v
-	}
-	if v := kv["model"]; v != "" {
-		kv["model."+config.BackendAnthropic] = v
-	}
-	if kv["backend"] == "api" {
-		kv["backend"] = config.BackendAnthropic
-	}
-	for _, k := range []string{"api_key.anthropic", "model.anthropic", "backend"} {
-		if _, err := tx.Exec(`INSERT INTO settings(key, value) VALUES(?, ?)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, kv[k]); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(`DELETE FROM settings WHERE key IN ('api_key', 'model', 'select_criteria',
-		'user_memory', 'pick_count', 'hours_back', 'overview', 'digest_times', 'discord_webhook',
-		'discord_embeds', 'discord_title', 'discord_color', 'discord_base_url', 'discord_after_fail')`); err != nil {
-		return err
-	}
-	if _, err := insertProfile(tx, p); err != nil {
-		return err
-	}
-
-	for _, q := range []string{
-		`INSERT INTO feeds(id, profile_id, title, url, category, enabled, etag, last_modified, failures,
-		                   last_attempt, last_success, last_error, position)
-		 SELECT id, 1, title, url, category, enabled, etag, last_modified, failures,
-		        last_attempt, last_success, last_error, position FROM feeds_v1`,
-		`INSERT INTO pages(profile_id, date, overview, created_at, updated_at)
-		 SELECT 1, date, overview, created_at, updated_at FROM pages_v1`,
-		`INSERT INTO page_items(id, profile_id, date, run_id, position, title, link, norm_link, category,
-		                        feed_name, summary, summary_ok, stage, image, created_at)
-		 SELECT id, 1, date, run_id, position, title, link, norm_link, category,
-		        feed_name, summary, summary_ok, stage, image, created_at FROM page_items_v1`,
-		`INSERT INTO runs(id, profile_id, date, kind, trigger, slot, started_at, finished_at, status,
-		                  message, candidates, picked, usage)
-		 SELECT id, 1, date, kind, trigger, slot, started_at, finished_at, status,
-		        message, candidates, picked, usage FROM runs_v1`,
-		`DROP TABLE page_items_v1`,
-		`DROP TABLE pages_v1`,
-		`DROP TABLE runs_v1`,
-		`DROP TABLE feeds_v1`,
-		fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion),
-	} {
-		if _, err := tx.Exec(q); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

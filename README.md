@@ -38,12 +38,12 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 ### 1. 入手・ビルド
 
 [Releases](https://github.com/kienn-HCl/mekiki/releases) から、使うOS・CPU向けのアーカイブ
-（linux / darwin の amd64・arm64、windows amd64）をダウンロードして展開する。中身はバイナリ1つと README・設定例。
+（linux / darwin の amd64・arm64、windows amd64）をダウンロードして展開する。中身はバイナリ1つと README、`deploy/`（systemdユニット・環境変数・OPMLの例）。
 
 自分でビルドする場合は Go 1.26以上:
 
 ```sh
-CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki
+make          # → ./mekiki（make を使わないなら CGO_ENABLED=0 go build -o mekiki ./cmd/mekiki）
 ```
 
 またはNix:
@@ -84,7 +84,7 @@ Basic認証は通信を暗号化しないので、インターネット越しに
 2. **プロファイル**（上部の「＋」）— 必要ならプロファイルを追加する。表示名とID（URLに使う。例 `tech`）を決める。
    既存プロファイルの選定基準などをコピーして作ることもできる。一覧で並べ替えができ、先頭のプロファイルが
    トップページを開いたときに表示される
-3. **フィード** — プロファイルごとにフィードURLを追加するか、OPMLをインポートする（形式は `feeds/example.opml`）
+3. **フィード** — プロファイルごとにフィードURLを追加するか、OPMLをインポートする（形式は `deploy/example.opml`）
 4. **プロファイル設定** — 興味・趣向、選定基準、要約実行の時刻（例 `07:00, 12:00, 18:00`）、Discordの投稿先を入れる
 5. **今日** — 「今すぐ要約実行」を押すと最初のページができる
 
@@ -153,8 +153,9 @@ sudo systemctl enable --now mekiki
 ## 開発
 
 リリース: `v1.2.3` のようなタグをpushすると、GitHub Actions（`.github/workflows/release.yml`）がテストを通してから
-各OS向けのバイナリをビルドし、Releaseに添付する（`SHA256SUMS` 付き）。
-
+各OS向けのバイナリをビルドし、Releaseに添付する（`SHA256SUMS` 付き）。ビルド手順は `Makefile` にあり、
+Actionsが呼ぶのと同じ `make dist` で手元でも全OS向けのアーカイブを `dist/` に作れる
+（`make dist TARGETS=linux/amd64` で一部だけ）。
 
 ```sh
 nix develop      # go・gopls・claude-code
@@ -164,4 +165,4 @@ go run ./cmd/mekiki serve -data ./data
 
 ## ドキュメント
 
-[SPEC.md](SPEC.md) — 仕様書。設計判断の経緯・運用で踏んだ障害の記録は付録A。
+[docs/SPEC.md](docs/SPEC.md) — 仕様書。設計判断の経緯・運用で踏んだ障害の記録は付録A。
