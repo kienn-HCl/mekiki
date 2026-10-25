@@ -38,7 +38,7 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 ### 1. 入手・ビルド
 
 [Releases](https://github.com/kienn-HCl/mekiki/releases) から、使うOS・CPU向けのアーカイブ
-（linux / darwin の amd64・arm64、windows amd64）をダウンロードして展開する。中身はバイナリ1つと README、`deploy/`（systemdユニット・環境変数・OPMLの例）。
+（linux / darwin の amd64・arm64、windows amd64）をダウンロードして展開する。中身はバイナリ1つと README・LICENSE・THIRD_PARTY_LICENSES.txt、`deploy/`（systemdユニット・環境変数・OPMLの例）。
 
 自分でビルドする場合は Go 1.26以上:
 
@@ -166,3 +166,8 @@ go run ./cmd/mekiki serve -data ./data
 ## ドキュメント
 
 [docs/SPEC.md](docs/SPEC.md) — 仕様書。設計判断の経緯・運用で踏んだ障害の記録は付録A。
+
+## ライセンス
+
+[MIT](LICENSE)。リリースのアーカイブには、バイナリに組み込まれる依存ライブラリとGoのライセンス文を
+`THIRD_PARTY_LICENSES.txt` として同梱している（`scripts/third-party-licenses.sh` で生成）。
