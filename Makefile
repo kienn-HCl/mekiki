@@ -6,7 +6,7 @@ TARGETS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 export CGO_ENABLED = 0
 GOFLAGS_BUILD = -trimpath -ldflags "-s -w -X main.version=$(VERSION)"
 
-EXTRA = README.md deploy
+EXTRA = README.md LICENSE deploy
 
 .PHONY: build test dist clean
 
@@ -26,6 +26,7 @@ dist: test
 	  mkdir -p build/$$name; \
 	  GOOS=$$os GOARCH=$$arch go build $(GOFLAGS_BUILD) -o build/$$name/mekiki$$ext ./cmd/mekiki; \
 	  cp -r $(EXTRA) build/$$name/; \
+	  GOOS=$$os GOARCH=$$arch scripts/third-party-licenses.sh > build/$$name/THIRD_PARTY_LICENSES.txt; \
 	  if [ "$$os" = windows ]; then \
 	    (cd build && zip -qr ../dist/$$name.zip $$name); \
 	  else \
