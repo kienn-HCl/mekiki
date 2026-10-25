@@ -19,7 +19,7 @@ const (
 	fallbackDisallowedTools = "WebSearch Bash Read Glob Grep Edit Write"
 )
 
-// CLI は claude -p（Claude Code CLI）経由の呼び出し。ログイン済みのサブスクリプション枠で動く。
+// CLI は claude -p（Claude Code CLI）経由の呼び出し。サーバでログイン済みのClaude Codeを使う。
 type CLI struct {
 	path  string
 	model string
