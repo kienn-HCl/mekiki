@@ -13,7 +13,6 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
   - Anthropic API（デフォルト）
   - OpenAI / Google Gemini / OpenRouter
   - OpenAI互換API（URLを指定。Ollama・LM Studio・vLLMなどのローカルLLMも可）
-  - `claude -p`（Claude Code CLI。サブスクリプション枠）
 - **Discord投稿（任意）**: プロファイルにWebhook URLを設定すると、追加された記事をDiscordにも投稿する
 - 設定・フィード管理はすべてWeb画面で行う。単一の静的リンクバイナリで、データはSQLiteファイル1つ
 
@@ -50,7 +49,6 @@ make          # → ./mekiki（make を使わないなら CGO_ENABLED=0 go build
 
 ```sh
 nix build                 # → result/bin/mekiki（テストも実行される）
-nix build .#with-claude   # claude -p 経路を使う場合。PATHにclaude-codeを含めたラッパー
 ```
 
 ### 2. 起動
@@ -80,7 +78,6 @@ Basic認証は通信を暗号化しないので、インターネット越しに
    - Anthropic API: APIキーを入力（または環境変数 `ANTHROPIC_API_KEY`）。モデルの既定は `claude-opus-5-5`
    - OpenAI / Gemini / OpenRouter: APIキーとモデル名を入力（OpenRouterのモデル名は `openai/gpt-5.1` の形式）
    - OpenAI互換: APIのURL（例 Ollamaなら `http://localhost:11434/v1`）とモデル名。キーが不要なら空のまま
-   - claude -p: mekikiを動かすユーザーで、サーバ上で一度 `claude` を起動してログインしておく
 2. **プロファイル**（上部の「＋」）— 必要ならプロファイルを追加する。表示名とID（URLに使う。例 `tech`）を決める。
    既存プロファイルの選定基準などをコピーして作ることもできる。一覧で並べ替えができ、先頭のプロファイルが
    トップページを開いたときに表示される
@@ -119,7 +116,7 @@ AI連携が未設定のうちは、定時の要約実行は保留される（設
 - 選定に失敗した実行は記事を消費しない（次回の実行で再び候補になる）
 - 実行の結果とAIの使用量（トークン数）は「履歴」画面と各日のページ下部で確認できる
 - 要約実行は同時に1つ。複数のプロファイルの実行時刻が重なった場合は順番に実行される
-- 本文が取れない記事をAIにWebページを取得させて要約する救済は、Anthropic API と claude -p だけが対応する
+- 本文が取れない記事をAIにWebページを取得させて要約する救済は、Anthropic API だけが対応する
   （他の経路ではタイトルから読み取れる範囲の要約になる）
 
 ## コマンド
@@ -146,9 +143,6 @@ sudo cp deploy/mekiki.service /etc/systemd/system/
 sudo systemctl edit mekiki      # MEKIKI_PASSWORD などを設定
 sudo systemctl enable --now mekiki
 ```
-
-`claude -p` 経路を使う場合は、サービスのユーザーで一度ログインしておく
-（`sudo -u mekiki -H claude`。認証情報は `/var/lib/mekiki/.claude` に保存される）。
 
 ## 開発
 

@@ -38,7 +38,7 @@
   {{end}}
   <div class="provider">
     <label class="radio"><input type="radio" name="backend" value="cli" {{if eq .S.Backend "cli"}}checked{{end}}>claude -p（Claude Code CLI）
-      <span class="muted small">サーバでログイン済みのClaude Codeのサブスクリプション枠で動く</span></label>
+      <span class="muted small">サーバでログイン済みのClaude Codeを使う</span></label>
     <div class="provider-fields"><div class="provider-inner">
       <div class="grid">
         <label>claude コマンドのパス<input name="cli_path" value="{{.S.CLIPath}}"></label>

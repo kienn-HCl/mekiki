@@ -6,8 +6,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 # ユーザーは事前に作成: sudo useradd -r -m -d /var/lib/mekiki -s /usr/sbin/nologin mekiki
-# claude -p 経路を使う場合は、このユーザーで claude にログインしておく
-#   sudo -u mekiki -H claude   （認証情報は /var/lib/mekiki/.claude に保存される）
 User=mekiki
 Group=mekiki
 WorkingDirectory=/var/lib/mekiki

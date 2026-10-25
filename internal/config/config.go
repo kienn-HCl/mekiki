@@ -21,7 +21,7 @@ const (
 	BackendGemini     = "gemini"     // Google Gemini API（OpenAI互換エンドポイント）
 	BackendOpenRouter = "openrouter" // OpenRouter
 	BackendCompat     = "compat"     // 任意のOpenAI互換API（Ollama・LM Studio・vLLM等）
-	BackendCLI        = "cli"        // claude -p（Claude Codeのサブスクリプション枠）
+	BackendCLI        = "cli"        // claude -p（Claude Code CLI）
 )
 
 // Provider はAPIキーとモデル名で使うAPI型の経路の定義。
