@@ -34,9 +34,10 @@
       <input name="category" value="{{.Category}}" list="cats" aria-label="カテゴリ">
       <label class="check"><input type="checkbox" name="enabled" value="1" {{if .Enabled}}checked{{end}}>有効</label>
       <button>保存</button>
+      <input name="url" type="url" value="{{.URL}}" required aria-label="フィードURL" class="feedurl">
     </form>
     <div class="feedinfo">
-      <a href="{{.URL}}" target="_blank" rel="noopener noreferrer" class="url">{{.URL}}</a>
+      <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">開く</a>
       <span>記事{{.ArticleCount}}件 · 最終成功 {{ago .LastSuccess}}</span>
       {{if .Failures}}<span class="warn">連続失敗{{.Failures}}回: {{.LastError}}</span>{{end}}
     </div>

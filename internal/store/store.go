@@ -512,10 +512,27 @@ func (s *Store) AddFeed(ctx context.Context, profileID int64, title, url, catego
 	return n > 0, nil
 }
 
-func (s *Store) UpdateFeed(ctx context.Context, profileID, id int64, title, category string, enabled bool) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE feeds SET title = ?, category = ?, enabled = ? WHERE id = ? AND profile_id = ?`,
-		title, category, enabled, id, profileID)
+// ErrFeedExists は同じプロファイルに同じURLのフィードがあることを表す。
+var ErrFeedExists = errors.New("そのURLはこのプロファイルに登録済みです")
+
+// UpdateFeed はフィードを更新する。URLが変わったときは取得状態（ETag・失敗回数）をリセットする。
+func (s *Store) UpdateFeed(ctx context.Context, profileID, id int64, title, url, category string, enabled bool) error {
+	var dup int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM feeds WHERE profile_id = ? AND url = ? AND id <> ?`,
+		profileID, url, id).Scan(&dup); err != nil {
+		return err
+	}
+	if dup > 0 {
+		return ErrFeedExists
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE feeds SET title = ?, category = ?, enabled = ?, url = ?,
+			etag          = CASE WHEN url = ? THEN etag ELSE '' END,
+			last_modified = CASE WHEN url = ? THEN last_modified ELSE '' END,
+			failures      = CASE WHEN url = ? THEN failures ELSE 0 END,
+			last_error    = CASE WHEN url = ? THEN last_error ELSE '' END
+		WHERE id = ? AND profile_id = ?`,
+		title, category, enabled, url, url, url, url, url, id, profileID)
 	return err
 }
 
