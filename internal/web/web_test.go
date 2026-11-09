@@ -493,3 +493,30 @@ func TestArchiveMonth(t *testing.T) {
 		t.Errorf("ページのない月: %.500s", body)
 	}
 }
+
+func TestUpdateFeedURL(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	st.AddFeed(ctx, 1, "A", "https://a.example/rss", "技術")
+	st.AddFeed(ctx, 1, "B", "https://b.example/rss", "技術")
+	feeds, _ := st.Feeds(ctx, 1)
+	a := feeds[0]
+	st.MarkFeedFailure(ctx, a.ID, "HTTP 404", time.Now())
+
+	form := url.Values{"title": {"A"}, "category": {"技術"}, "enabled": {"1"}, "url": {"https://b.example/rss"}}
+	if loc := post(t, ts, fmt.Sprintf("/p/main/feeds/%d/update", a.ID), form); !strings.Contains(loc, "err=") {
+		t.Errorf("登録済みのURLに変更できてしまう: %s", loc)
+	}
+	form.Set("url", "ftp://a.example/rss")
+	if loc := post(t, ts, fmt.Sprintf("/p/main/feeds/%d/update", a.ID), form); !strings.Contains(loc, "err=") {
+		t.Errorf("不正なURLに変更できてしまう: %s", loc)
+	}
+	form.Set("url", "https://a.example/atom.xml")
+	if loc := post(t, ts, fmt.Sprintf("/p/main/feeds/%d/update", a.ID), form); strings.Contains(loc, "err=") {
+		t.Fatalf("URLを変更できない: %s", loc)
+	}
+	feeds, _ = st.Feeds(ctx, 1)
+	if feeds[0].URL != "https://a.example/atom.xml" || feeds[0].Failures != 0 || feeds[0].LastError != "" {
+		t.Errorf("変更後のフィード: %+v", feeds[0])
+	}
+}

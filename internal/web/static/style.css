@@ -179,7 +179,7 @@ th, td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
 .feedrow.disabled { opacity: .6; }
 .feededit { display: grid; grid-template-columns: 2fr 1fr auto auto; gap: 8px; align-items: center; grid-column: 1; }
 .feedinfo { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8em; color: var(--muted); min-width: 0; }
-.feedinfo .url { overflow-wrap: anywhere; }
+.feededit .feedurl { grid-column: 1 / 3; font-size: .85em; }
 .feedrow > form:last-child { grid-column: 2; grid-row: 1; }
 .warn { color: var(--warn); overflow-wrap: anywhere; }
 @media (max-width: 640px) {

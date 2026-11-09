@@ -655,8 +655,8 @@ func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request, p config.
 	feedURL := strings.TrimSpace(r.FormValue("url"))
 	title := strings.TrimSpace(r.FormValue("title"))
 	category := strings.TrimSpace(r.FormValue("category"))
-	u, err := url.Parse(feedURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	u, ok := parseFeedURL(feedURL)
+	if !ok {
 		back(w, r, fallback, "err", "フィードURLが不正です")
 		return
 	}
@@ -676,6 +676,11 @@ func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request, p config.
 		return
 	}
 	back(w, r, fallback, "msg", "「"+title+"」を追加しました。次回の取得から記事が集まります")
+}
+
+func parseFeedURL(s string) (*url.URL, bool) {
+	u, err := url.Parse(s)
+	return u, err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // probeFeedTitle はタイトル未入力のフィード追加時に、フィード自体からタイトルを取る。
@@ -750,8 +755,17 @@ func (s *Server) actionUpdateFeed(w http.ResponseWriter, r *http.Request, p conf
 		back(w, r, fallback, "err", "フィード名を入力してください")
 		return
 	}
-	err := s.App.Store.UpdateFeed(r.Context(), p.ID, id, title,
+	feedURL := strings.TrimSpace(r.FormValue("url"))
+	if _, ok := parseFeedURL(feedURL); !ok {
+		back(w, r, fallback, "err", "フィードURLが不正です")
+		return
+	}
+	err := s.App.Store.UpdateFeed(r.Context(), p.ID, id, title, feedURL,
 		strings.TrimSpace(r.FormValue("category")), r.FormValue("enabled") == "1")
+	if errors.Is(err, store.ErrFeedExists) {
+		back(w, r, fallback, "err", err.Error())
+		return
+	}
 	if err != nil {
 		serverError(w, err)
 		return
