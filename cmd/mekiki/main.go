@@ -6,10 +6,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata" // tzdataのない最小環境でもタイムゾーン設定を使えるように
@@ -18,6 +20,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/conffile"
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
+	evalpkg "github.com/kienn-HCl/mekiki/internal/eval"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
 	"github.com/kienn-HCl/mekiki/internal/store"
 	"github.com/kienn-HCl/mekiki/internal/web"
@@ -32,6 +35,9 @@ const usage = `mekiki — RSSの注目記事をAIが選んで要約するWebア�
   mekiki import-opml [-profile ID] FILE       OPMLからフィードを登録（-new でプロファイルも作成）
   mekiki fetch [-data ./data]                 全フィードを1回取得
   mekiki digest [-profile ID] [-rebuild]      要約実行を1回行う（今日のページに追記）
+  mekiki eval select [オプション]             保存済みの候補で選定をやり直し、本番と比べる
+  mekiki eval summarize [オプション]          保存済みの本文で要約をやり直し、本番と並べる
+                                              （オプションは mekiki eval select -h。-run を付けるまでAIには送らない）
 
   -profile を省略すると最初のプロファイルが対象。各コマンドとも -data でデータディレクトリを指定
   mekiki version
@@ -62,6 +68,8 @@ func main() {
 		err = fetchOnce(args)
 	case "digest":
 		err = digestOnce(args)
+	case "eval":
+		err = evalCmd(args)
 	case "version":
 		fmt.Println("mekiki", version)
 	case "-h", "--help", "help":
@@ -250,4 +258,85 @@ func digestOnce(args []string) error {
 		kind = digest.KindRebuild
 	}
 	return app.New(st).Digest.Run(context.Background(), digest.Options{ProfileID: p.ID, Kind: kind, Trigger: digest.TriggerManual})
+}
+
+func evalCmd(args []string) error {
+	if len(args) == 0 || (args[0] != "select" && args[0] != "summarize") {
+		return errors.New("使い方: mekiki eval select|summarize [オプション]")
+	}
+	what := args[0]
+	fs := flag.NewFlagSet("eval "+what, flag.ExitOnError)
+	slug := fs.String("profile", "", "対象のプロファイルID")
+	days := fs.Int("days", 14, "何日前までの記録を使うか")
+	limit := fs.Int("limit", 0, "select: 実行の数 / summarize: 記事の数の上限（0なら無制限、summarizeの既定は20）")
+	backend := fs.String("backend", "", "AI連携方式を上書き（anthropic / openai / gemini / openrouter / compat / cli）")
+	model := fs.String("model", "", "モデルを上書き")
+	effort := fs.String("effort", "", "effortを上書き（low / medium / high など。none で送らない）")
+	pick := fs.Int("pick", 0, "select: 選ぶ件数（0ならプロファイルの値）")
+	maxChars := fs.Int("max-chars", 0, "summarize: 要約に渡す本文の上限文字数（0なら記録された全文）")
+	judge := fs.String("judge", "", "summarize: 要約の忠実性を採点させるモデル（同じ経路で呼ぶ）")
+	out := fs.String("out", "", "summarize: 本番とやり直しの要約を並べたレポートの出力先（既定はデータディレクトリの eval/）")
+	run := fs.Bool("run", false, "実際にAIへ問い合わせる（付けなければ問い合わせ内容と量の表示だけ）")
+	st, _, err := openStore(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	p, err := findProfile(st, *slug)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	kv, err := st.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	cfg := config.Load(kv)
+	if *backend != "" {
+		cfg.Backend = *backend
+	}
+	if *model != "" {
+		if cfg.Backend == config.BackendCLI {
+			cfg.CLIModel = *model
+		} else {
+			cfg.Models[cfg.Backend] = *model
+		}
+	}
+	if *effort == "none" {
+		cfg.Efforts[cfg.Backend] = ""
+	} else if *effort != "" {
+		cfg.Efforts[cfg.Backend] = *effort
+	}
+	opt := evalpkg.Options{
+		Profile: p, Settings: cfg, Since: time.Now().AddDate(0, 0, -*days), Limit: *limit, Pick: *pick,
+		MaxChars: *maxChars, Judge: *judge, Run: *run, Out: os.Stdout,
+	}
+	r := &evalpkg.Runner{Store: st, NewBackend: app.NewBackend}
+	if what == "select" {
+		_, err = r.Select(ctx, opt)
+		return err
+	}
+	if opt.Limit == 0 {
+		opt.Limit = 20
+	}
+	if !opt.Run {
+		_, err = r.Summarize(ctx, opt, io.Discard)
+		return err
+	}
+	path := *out
+	if path == "" {
+		dir := filepath.Join(fs.Lookup("data").Value.String(), "eval")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		path = filepath.Join(dir, "summarize-"+time.Now().Format("20060102-150405")+".md")
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = r.Summarize(ctx, opt, f)
+	fmt.Println("レポート:", path)
+	return err
 }

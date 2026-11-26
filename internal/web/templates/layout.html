@@ -21,6 +21,7 @@
   <nav class="sub" aria-label="{{.Profile.Name}}">
     <a href="{{.Prefix}}/" class="{{if eq .Nav "day"}}active{{end}}">今日</a>
     <a href="{{.Prefix}}/archive" class="{{if eq .Nav "archive"}}active{{end}}">アーカイブ</a>
+    <a href="{{.Prefix}}/saved" class="{{if eq .Nav "saved"}}active{{end}}">保存</a>
     <a href="{{.Prefix}}/articles" class="{{if eq .Nav "articles"}}active{{end}}">RSS</a>
     <a href="{{.Prefix}}/feeds" class="{{if eq .Nav "feeds"}}active{{end}}">フィード</a>
     <a href="{{.Prefix}}/runs" class="{{if eq .Nav "runs"}}active{{end}}">履歴</a>
@@ -41,3 +42,17 @@
 <script src="/static/app.js"></script>
 </body>
 </html>
+
+{{/* お気に入り・後で読むのボタン。引数は (list Prefix 種類 ID お気に入り済み 後で読む済み) */}}
+{{define "savebtns"}}
+<span class="savebtns">
+  <form method="post" action="{{index . 0}}/saved/toggle" class="savebtn">
+    <input type="hidden" name="{{index . 1}}" value="{{index . 2}}"><input type="hidden" name="kind" value="favorite">
+    <button type="submit" class="mini{{if eq (index . 3) "true"}} on{{end}}" aria-pressed="{{index . 3}}" title="お気に入り">★<span>お気に入り</span></button>
+  </form>
+  <form method="post" action="{{index . 0}}/saved/toggle" class="savebtn">
+    <input type="hidden" name="{{index . 1}}" value="{{index . 2}}"><input type="hidden" name="kind" value="later">
+    <button type="submit" class="mini{{if eq (index . 4) "true"}} on{{end}}" aria-pressed="{{index . 4}}" title="後で読む">◷<span>後で読む</span></button>
+  </form>
+</span>
+{{end}}

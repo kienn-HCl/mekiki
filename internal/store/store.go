@@ -17,7 +17,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/config"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -133,6 +133,70 @@ CREATE TABLE IF NOT EXISTS runs (
 	usage       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(profile_id, date);
+
+-- 選定に渡した候補の写し。記事本体は保持期間で消えるので、計測と再生ツールのために表示用の値を複製して持つ
+CREATE TABLE IF NOT EXISTS run_candidates (
+	run_id       INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	position     INTEGER NOT NULL,          -- 選定プロンプトでの [index]
+	profile_id   INTEGER NOT NULL,
+	title        TEXT NOT NULL,
+	link         TEXT NOT NULL,
+	norm_link    TEXT NOT NULL,
+	category     TEXT NOT NULL DEFAULT '',
+	feed_name    TEXT NOT NULL DEFAULT '',
+	published_at INTEGER,
+	picked_rank  INTEGER,                   -- 選ばれた順位（0始まり）。選ばれなければ NULL
+	PRIMARY KEY(run_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_cand_norm ON run_candidates(profile_id, norm_link);
+
+-- 要約に渡した本文（再生ツール用）
+CREATE TABLE IF NOT EXISTS item_inputs (
+	item_id INTEGER PRIMARY KEY REFERENCES page_items(id) ON DELETE CASCADE,
+	text    TEXT NOT NULL
+);
+
+-- 記事ページの取得結果。同じページを短時間に何度も取りに行かないためのキャッシュ（html が空なら取得失敗）
+CREATE TABLE IF NOT EXISTS page_cache (
+	url        TEXT PRIMARY KEY,
+	fetched_at INTEGER NOT NULL,
+	html       TEXT NOT NULL
+);
+
+-- 記事を開いた記録。ページや記事本体が消えても残す
+CREATE TABLE IF NOT EXISTS opens (
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	norm_link  TEXT NOT NULL,
+	source     TEXT NOT NULL,               -- page | reader | saved
+	first_at   INTEGER NOT NULL,
+	last_at    INTEGER NOT NULL,
+	count      INTEGER NOT NULL,
+	PRIMARY KEY(profile_id, norm_link, source)
+);
+
+-- お気に入り・後で読む
+CREATE TABLE IF NOT EXISTS saved (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	kind       TEXT NOT NULL,               -- favorite | later
+	norm_link  TEXT NOT NULL,
+	title      TEXT NOT NULL,
+	link       TEXT NOT NULL,
+	category   TEXT NOT NULL DEFAULT '',
+	feed_name  TEXT NOT NULL DEFAULT '',
+	summary    TEXT NOT NULL DEFAULT '',
+	image      TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	UNIQUE(profile_id, kind, norm_link)
+);
+
+-- 再生ツールのAI応答。同じ問い合わせを繰り返し送らない
+CREATE TABLE IF NOT EXISTS eval_cache (
+	key        TEXT PRIMARY KEY,
+	text       TEXT NOT NULL,
+	usage      TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
 `
 
 type Store struct {
@@ -165,7 +229,8 @@ func (s *Store) initSchema() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version != 0 && version != schemaVersion {
+	// 版2→3はテーブルの追加だけなので、スキーマの実行で済む
+	if version != 0 && version != 2 && version != schemaVersion {
 		return fmt.Errorf("対応していないデータベースの版です（%d）", version)
 	}
 	if _, err := s.db.Exec(schema); err != nil {
@@ -800,6 +865,7 @@ type PageItem struct {
 	Stage     string
 	Image     string
 	CreatedAt time.Time
+	Input     string // 要約に渡した本文。AppendItems で item_inputs に保存する
 }
 
 const pageCols = `profile_id, date, overview, created_at, updated_at,
@@ -910,9 +976,20 @@ func (s *Store) AppendItems(ctx context.Context, profileID int64, date string, i
 	}
 	defer stmt.Close()
 	for _, it := range items {
-		if _, err := stmt.ExecContext(ctx, profileID, date, it.RunID, it.Position, it.Title, it.Link,
+		res, err := stmt.ExecContext(ctx, profileID, date, it.RunID, it.Position, it.Title, it.Link,
 			it.NormLink, it.Category, it.FeedName, it.Summary, it.SummaryOK, it.Stage,
-			it.Image, unix(now)); err != nil {
+			it.Image, unix(now))
+		if err != nil {
+			return err
+		}
+		if it.Input == "" {
+			continue
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO item_inputs(item_id, text) VALUES(?, ?)`, id, it.Input); err != nil {
 			return err
 		}
 	}

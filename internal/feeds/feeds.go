@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ const (
 	maxRetries   = 4 // 接続エラー・タイムアウト系のみ。HTTPエラー応答はリトライしない
 	maxFeedBytes = 10 << 20
 	workers      = 10
+	hostInterval = time.Second // 同じサイトのフィードを続けて取得するときの間隔
 	// タイトル完全一致dedupの対象とする最小タイトル長（短い定型タイトルの誤統合を防ぐ）
 	titleDedupMinChars = 10
 )
@@ -145,9 +147,10 @@ type Result struct {
 	Duration time.Duration
 }
 
+// outcome は1つのURLの取得結果。同じURLを登録したフィード（別プロファイル）が複数あれば feeds に並ぶ。
 type outcome struct {
-	feed          store.Feed
-	articles      []store.Article
+	feeds         []store.Feed
+	items         []*gofeed.Item
 	notModified   bool
 	etag, lastMod string
 	err           error
@@ -178,22 +181,46 @@ func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options
 	}
 	res.Feeds = len(targets)
 
-	jobs := make(chan store.Feed)
+	// 同じURLは1回だけ取得し、同じホストのURLは1つのワーカーが間隔を空けて順に取得する
+	var hosts [][][]store.Feed
+	hostIdx, urlIdx := map[string]int{}, map[string][2]int{}
+	for _, f := range targets {
+		if k, ok := urlIdx[f.URL]; ok {
+			hosts[k[0]][k[1]] = append(hosts[k[0]][k[1]], f)
+			continue
+		}
+		h := hostOf(f.URL)
+		hi, ok := hostIdx[h]
+		if !ok {
+			hi = len(hosts)
+			hostIdx[h] = hi
+			hosts = append(hosts, nil)
+		}
+		urlIdx[f.URL] = [2]int{hi, len(hosts[hi])}
+		hosts[hi] = append(hosts[hi], []store.Feed{f})
+	}
+
+	jobs := make(chan [][]store.Feed)
 	results := make(chan outcome)
 	var wg sync.WaitGroup
 	client := &http.Client{Timeout: fetchTimeout}
-	for range min(workers, max(1, len(targets))) {
+	for range min(workers, max(1, len(hosts))) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for f := range jobs {
-				results <- fetchOne(ctx, client, f, opt.ArticlesPerFeed, now)
+			for group := range jobs {
+				for i, feeds := range group {
+					if i > 0 {
+						time.Sleep(hostInterval)
+					}
+					results <- fetchOne(ctx, client, feeds)
+				}
 			}
 		}()
 	}
 	go func() {
-		for _, f := range targets {
-			jobs <- f
+		for _, g := range hosts {
+			jobs <- g
 		}
 		close(jobs)
 		wg.Wait()
@@ -202,32 +229,59 @@ func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options
 
 	// DB更新はこのゴルーチンだけで行う
 	for o := range results {
-		if o.err != nil {
-			res.Failed++
-			slog.Warn("フィード取得失敗", "feed", o.feed.Title, "failures", o.feed.Failures+1, "err", o.err)
-			if err := st.MarkFeedFailure(ctx, o.feed.ID, o.err.Error(), now); err != nil {
+		for _, f := range o.feeds {
+			if o.err != nil {
+				res.Failed++
+				slog.Warn("フィード取得失敗", "feed", f.Title, "failures", f.Failures+1, "err", o.err)
+				if err := st.MarkFeedFailure(ctx, f.ID, o.err.Error(), now); err != nil {
+					return res, err
+				}
+				continue
+			}
+			if err := st.MarkFeedSuccess(ctx, f.ID, o.etag, o.lastMod, now, o.notModified); err != nil {
 				return res, err
 			}
-			continue
+			if o.notModified {
+				continue
+			}
+			var articles []store.Article
+			for i, it := range o.items {
+				if i >= opt.ArticlesPerFeed {
+					break
+				}
+				if a, ok := itemToArticle(it, f, now); ok {
+					articles = append(articles, a)
+				}
+			}
+			n, err := st.InsertArticles(ctx, articles)
+			if err != nil {
+				return res, err
+			}
+			res.Added += n
 		}
-		if err := st.MarkFeedSuccess(ctx, o.feed.ID, o.etag, o.lastMod, now, o.notModified); err != nil {
-			return res, err
-		}
-		if o.notModified {
-			continue
-		}
-		n, err := st.InsertArticles(ctx, o.articles)
-		if err != nil {
-			return res, err
-		}
-		res.Added += n
 	}
 	res.Duration = time.Since(start)
 	return res, nil
 }
 
-func fetchOne(ctx context.Context, client *http.Client, f store.Feed, perFeed int, now time.Time) outcome {
-	o := outcome{feed: f}
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return strings.ToLower(u.Host)
+	}
+	return raw
+}
+
+// fetchOne は feeds（すべて同じURL）を1回のリクエストで取得する。
+// 条件付きGETの検証子は、全フィードで同じときだけ送る（違えば一部のフィードが新着を取りこぼすため）。
+func fetchOne(ctx context.Context, client *http.Client, feeds []store.Feed) outcome {
+	o := outcome{feeds: feeds}
+	f := feeds[0]
+	etag, lastMod := f.ETag, f.LastModified
+	for _, g := range feeds[1:] {
+		if g.ETag != etag || g.LastModified != lastMod {
+			etag, lastMod = "", ""
+		}
+	}
 	var data []byte
 	var hdr http.Header
 	for attempt := 0; ; attempt++ {
@@ -237,11 +291,11 @@ func fetchOne(ctx context.Context, client *http.Client, f store.Feed, perFeed in
 			return o
 		}
 		req.Header.Set("User-Agent", UserAgent)
-		if f.ETag != "" {
-			req.Header.Set("If-None-Match", f.ETag)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
 		}
-		if f.LastModified != "" {
-			req.Header.Set("If-Modified-Since", f.LastModified)
+		if lastMod != "" {
+			req.Header.Set("If-Modified-Since", lastMod)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -281,14 +335,7 @@ func fetchOne(ctx context.Context, client *http.Client, f store.Feed, perFeed in
 		return o
 	}
 	o.etag, o.lastMod = hdr.Get("ETag"), hdr.Get("Last-Modified")
-	for i, it := range parsed.Items {
-		if i >= perFeed {
-			break
-		}
-		if a, ok := itemToArticle(it, f, now); ok {
-			o.articles = append(o.articles, a)
-		}
-	}
+	o.items = parsed.Items
 	return o
 }
 

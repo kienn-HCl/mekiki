@@ -97,6 +97,7 @@ func (c *CLI) Complete(ctx context.Context, req Request) (Response, error) {
 			Output:        out.Usage.OutputTokens,
 			CacheRead:     out.Usage.CacheReadInputTokens,
 			CacheCreation: out.Usage.CacheCreationInputTokens,
+			Model:         c.model,
 		}
 	}
 	return resp, nil

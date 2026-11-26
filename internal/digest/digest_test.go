@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"sync"
@@ -361,5 +363,49 @@ func TestProfilesAreIndependent(t *testing.T) {
 	}
 	if f, _ := st.Feeds(ctx, newsID); len(f) != 0 {
 		t.Error("削除したプロファイルのフィードが残っている")
+	}
+}
+
+func TestRecordsAndPageCache(t *testing.T) {
+	var mu sync.Mutex
+	hits := map[string]int{}
+	page := `<html><head><meta property="og:image" content="/og.png"></head><body><p>` +
+		strings.Repeat("ページから取った本文。", 60) + `</p></body></html>`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits[r.URL.Path]++
+		mu.Unlock()
+		w.Write([]byte(page))
+	}))
+	defer ts.Close()
+
+	r, st, feedID := setup(t, &fakeBackend{pick: 2})
+	ctx := context.Background()
+	// 本文も画像もない記事。要約と画像のためにページを取りに行く
+	var list []store.Article
+	for i := range 3 {
+		link := fmt.Sprintf("%s/a/%d", ts.URL, i)
+		list = append(list, store.Article{FeedID: feedID, Title: fmt.Sprintf("ページ取得が必要な記事その%d", i),
+			Link: link, NormLink: extract.NormalizeURL(link), PublishedAt: time.Now(), FetchedAt: time.Now()})
+	}
+	st.InsertArticles(ctx, list)
+	run(t, r, KindAppend)
+	run(t, r, KindRebuild)
+
+	if hits["/a/0"] != 1 || hits["/a/1"] != 1 || hits["/a/2"] != 0 {
+		t.Errorf("同じページを取り直した: %v", hits)
+	}
+	runs, _ := st.RunsOn(ctx, profileID, today())
+	cands, _ := st.RunCandidates(ctx, runs[len(runs)-1].ID)
+	if len(cands) != 3 || cands[0].PickedRank != 0 || cands[1].PickedRank != 1 || cands[2].PickedRank != -1 {
+		t.Errorf("候補の記録: %+v", cands)
+	}
+	inputs, _ := st.ItemInputs(ctx, profileID, time.Now().Add(-time.Hour), 10)
+	if len(inputs) != 2 || !strings.Contains(inputs[0].Text, "ページから取った本文") {
+		t.Errorf("要約の入力の記録: %+v", inputs)
+	}
+	items, _ := st.PageItems(ctx, profileID, today())
+	if len(items) != 2 || items[0].Stage != "page" || !strings.HasSuffix(items[0].Image, "/og.png") {
+		t.Errorf("ページ由来の要約・画像: %+v", items)
 	}
 }

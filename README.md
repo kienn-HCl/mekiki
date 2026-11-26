@@ -9,6 +9,9 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 - **プロファイル**: 「Tech」「ニュース」のように用途ごとにプロファイルを作り、画面上部で切り替える。
   フィード・選定基準・興味・実行時刻・ページ・Discord投稿先はプロファイルごとに別
 - **RSSリーダー（サブ）**: 取得した記事をフィード・カテゴリ別に一覧できる。取得は定期実行＋「今すぐ取得」ボタン
+- **お気に入り・後で読む**: 日付ページやRSSの記事をボタンひとつで保存し、「保存」画面で読み返せる
+- **計測**: 実行ごとのAI費用（推定）や、載った記事を開いた・保存した割合を履歴画面に出す。
+  `mekiki eval` で、記録済みの候補・本文を使って設定を変えた選定・要約をやり直し、本番と比べられる
 - **AI連携**: 次から選べる（全プロファイル共通）
   - Anthropic API（デフォルト）
   - OpenAI / Google Gemini / OpenRouter
@@ -127,7 +130,12 @@ mekiki import-opml [-profile ID] FILE            # OPMLからフィードを登�
 mekiki import-opml -profile news -new ニュース FILE # プロファイルを作ってから登録
 mekiki fetch                                     # 全フィードを1回取得
 mekiki digest [-profile ID] [-rebuild]           # 要約実行を1回（サーバ停止中のメンテナンス用）
+mekiki eval select [-model M] [-effort E] [-run]  # 記録済みの候補で選定をやり直し、本番と比べる
+mekiki eval summarize [-max-chars N] [-judge M] [-run]  # 記録済みの本文で要約をやり直し、本番と並べる
 ```
+
+`eval` は記事のページやフィードにはアクセスせず、`-run` を付けるまではAIにも問い合わせない（回数と費用の目安だけ出す）。
+同じ問い合わせの応答はDBに保存して使い回す。詳しくは [docs/SPEC.md](docs/SPEC.md) の§14。
 
 `-profile` を省略すると最初のプロファイルが対象。いずれも `-data` でデータディレクトリを指定する。`fetch` / `digest` はサーバとは別プロセスで動くため、
 サーバ稼働中はWeb画面のボタンを使う。

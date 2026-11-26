@@ -31,9 +31,13 @@
     </div>
     {{if not .Articles}}<p class="muted">記事がありません。{{if not .Groups}}<a href="{{.Prefix}}/feeds">フィード管理</a>からフィードを追加してください。{{end}}</p>{{end}}
     {{range .Articles}}
+    {{$m := index $.Marks .NormLink}}
     <article class="row{{if .Read}} read{{end}}">
-      <a class="title" href="/go/{{.ID}}" target="_blank" rel="noopener">{{.Title}}</a>
-      <div class="meta">{{.FeedName}} · {{if .PublishedAt.IsZero}}取得 {{ago .FetchedAt}}{{else}}{{ago .PublishedAt}}{{end}}</div>
+      <a class="title" href="{{$.Prefix}}/go/article/{{.ID}}" target="_blank" rel="noopener">{{.Title}}</a>
+      <div class="meta rowmeta">
+        <span>{{.FeedName}} · {{if .PublishedAt.IsZero}}取得 {{ago .FetchedAt}}{{else}}{{ago .PublishedAt}}{{end}}</span>
+        {{template "savebtns" (list $.Prefix "article" (print .ID) (print $m.Favorite) (print $m.Later))}}
+      </div>
       {{with snippet .Body 180}}<p class="snippet">{{.}}</p>{{end}}
     </article>
     {{end}}

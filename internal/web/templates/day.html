@@ -52,13 +52,17 @@
   </h3>
   <div class="cards">
   {{range .Items}}
+    {{$m := index $.Marks .NormLink}}
     <article class="card{{if not .SummaryOK}} failed{{end}}">
-      {{if .Image}}<a class="thumb" href="{{.Link}}" target="_blank" rel="noopener noreferrer"><img src="{{.Image}}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>{{end}}
+      {{if .Image}}<a class="thumb" href="{{$.Prefix}}/go/item/{{.ID}}" target="_blank" rel="noopener noreferrer"><img src="{{.Image}}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>{{end}}
       <div class="body">
         <div class="meta">{{.Category}} / {{.FeedName}}</div>
-        <h4><a href="{{.Link}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a></h4>
+        <h4><a href="{{$.Prefix}}/go/item/{{.ID}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a></h4>
         <p class="summary">{{.Summary}}</p>
-        <div class="meta small">要約元: {{stageLabel .Stage}}</div>
+        <div class="cardfoot">
+          <span class="meta small">要約元: {{stageLabel .Stage}}</span>
+          {{template "savebtns" (list $.Prefix "item" (print .ID) (print $m.Favorite) (print $m.Later))}}
+        </div>
       </div>
     </article>
   {{end}}
