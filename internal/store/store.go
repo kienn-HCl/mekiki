@@ -17,7 +17,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/config"
 )
 
-const schemaVersion = 3
+const schemaVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -229,8 +229,7 @@ func (s *Store) initSchema() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	// 版2→3はテーブルの追加だけなので、スキーマの実行で済む
-	if version != 0 && version != 2 && version != schemaVersion {
+	if version != 0 && version != schemaVersion {
 		return fmt.Errorf("対応していないデータベースの版です（%d）", version)
 	}
 	if _, err := s.db.Exec(schema); err != nil {

@@ -40,28 +40,3 @@ func TestFreshDBAndCandidatesPerProfile(t *testing.T) {
 		t.Errorf("候補: A=%d B=%d, want 0 and 1", len(ca), len(cb))
 	}
 }
-
-func TestUpgradeFromV2(t *testing.T) {
-	dir := t.TempDir()
-	st, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{"DROP TABLE run_candidates", "DROP TABLE item_inputs", "DROP TABLE page_cache",
-		"DROP TABLE opens", "DROP TABLE saved", "DROP TABLE eval_cache", "PRAGMA user_version = 2"} {
-		if _, err := st.db.Exec(q); err != nil {
-			t.Fatal(q, err)
-		}
-	}
-	st.Close()
-	st, err = Open(dir)
-	if err != nil {
-		t.Fatalf("版2のDBを開けない: %v", err)
-	}
-	defer st.Close()
-	var v int
-	st.db.QueryRow("PRAGMA user_version").Scan(&v)
-	if _, err := st.SavedMarks(context.Background(), 1); err != nil || v != schemaVersion {
-		t.Errorf("版3に上がっていない: version=%d err=%v", v, err)
-	}
-}

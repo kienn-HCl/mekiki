@@ -90,7 +90,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 	mux.HandleFunc("GET /{$}", s.home)
-	mux.HandleFunc("GET /go/{id}", s.goArticle)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.actionSaveSettings)
@@ -607,23 +606,6 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request, p config.Profi
 		data.NextURL = link(pageNo + 1)
 	}
 	s.render(w, "articles", data)
-}
-
-// goArticle は記事を既読にしてから元記事へ飛ばす。
-func (s *Server) goArticle(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	a, err := s.App.Store.Article(r.Context(), id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	_ = s.App.Store.MarkRead(r.Context(), id)
-	u, err := url.Parse(a.Link)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		http.Error(w, "記事URLが不正です", http.StatusBadRequest)
-		return
-	}
-	http.Redirect(w, r, a.Link, http.StatusFound)
 }
 
 func (s *Server) actionMarkRead(w http.ResponseWriter, r *http.Request, p config.Profile) {
