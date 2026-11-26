@@ -18,6 +18,9 @@ import (
 
 var ErrFetchBusy = errors.New("フィード取得中です")
 
+// snapshotDays は選定候補・要約の入力の写しを残す日数（記事の保持期間がこれより長ければそちら）。
+const snapshotDays = 90
+
 type App struct {
 	Store  *store.Store
 	Digest *digest.Runner
@@ -139,6 +142,11 @@ func (a *App) doFetch(ctx context.Context, profileID int64) (feeds.Result, error
 
 	if n, err := a.Store.PruneArticles(ctx, now.AddDate(0, 0, -cfg.RetentionDays)); err == nil && n > 0 {
 		slog.Info("保持期間切れの記事を削除", "count", n)
+	}
+	// 計測・再生ツール用の写しは記事より長く残す
+	snapDays := max(cfg.RetentionDays, snapshotDays)
+	if err := a.Store.PruneSnapshots(ctx, now.AddDate(0, 0, -snapDays), now.Add(-48*time.Hour)); err != nil {
+		slog.Warn("古い記録の削除に失敗", "err", err)
 	}
 	return res, err
 }

@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -518,5 +519,70 @@ func TestUpdateFeedURL(t *testing.T) {
 	feeds, _ = st.Feeds(ctx, 1)
 	if feeds[0].URL != "https://a.example/atom.xml" || feeds[0].Failures != 0 || feeds[0].LastError != "" {
 		t.Errorf("変更後のフィード: %+v", feeds[0])
+	}
+}
+
+func TestSavedAndOpens(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	date := seed(t, st)
+	items, _ := st.PageItems(ctx, 1, date)
+	it := items[0]
+
+	// 後で読むに入れて、もう一度押すと外れる（JSON で状態が返る）
+	toggle := func(form url.Values) bool {
+		t.Helper()
+		req, _ := http.NewRequest("POST", ts.URL+"/p/main/saved/toggle", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var res struct{ On bool }
+		if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&res) != nil {
+			t.Fatalf("toggle %v: %d", form, resp.StatusCode)
+		}
+		return res.On
+	}
+	later := url.Values{"item": {fmt.Sprint(it.ID)}, "kind": {"later"}}
+	if !toggle(later) || toggle(later) || !toggle(later) {
+		t.Error("後で読むの切り替え")
+	}
+	feeds, _ := st.Feeds(ctx, 1)
+	arts, _ := st.Articles(ctx, store.ArticleFilter{ProfileID: 1, FeedID: feeds[0].ID, Limit: 10})
+	if !toggle(url.Values{"article": {fmt.Sprint(arts[0].ID)}, "kind": {"favorite"}}) {
+		t.Error("RSSの記事をお気に入りにできない")
+	}
+	_, body := get(t, ts, "/p/main/saved")
+	if !strings.Contains(body, "掲載記事") || !strings.Contains(body, `aria-pressed="true"`) {
+		t.Errorf("後で読む一覧: %.500s", body)
+	}
+	_, body = get(t, ts, "/p/main/saved?kind=favorite")
+	if !strings.Contains(body, "記事 &lt;script&gt;") {
+		t.Errorf("お気に入り一覧: %.500s", body)
+	}
+
+	// 日付ページのリンクは開いた記録を取ってから元記事へ
+	resp, err := noRedirect().Get(ts.URL + fmt.Sprintf("/p/main/go/item/%d", it.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != it.Link {
+		t.Errorf("リダイレクト: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	sig, _ := st.Signals(ctx, 1)
+	if g := sig[it.NormLink]; !g.Opened || !g.Later || !g.Favorite {
+		t.Errorf("反応: %+v", g)
+	}
+	_, body = get(t, ts, "/p/main/runs")
+	if !strings.Contains(body, "役に立った1件あたり") || !strings.Contains(body, "開 1 / 保 1") {
+		t.Errorf("実行履歴の集計: %.800s", body)
+	}
+	_, body = get(t, ts, "/p/main/")
+	if !strings.Contains(body, "/p/main/go/item/") {
+		t.Error("日付ページのリンクが記録用のURLになっていない")
 	}
 }

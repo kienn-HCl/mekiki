@@ -47,3 +47,16 @@ func TestTracker(t *testing.T) {
 		t.Errorf("JSONからの復元: %q != %q", got, line)
 	}
 }
+
+func TestRunCost(t *testing.T) {
+	tr := NewTracker()
+	tr.Record("select", &Usage{Input: 1_000_000, Output: 100_000, Model: "claude-opus-5-5"})
+	tr.Record("summarize", &Usage{Input: 2_000_000, CacheRead: 1_000_000, Model: "anthropic/claude-haiku-5-5"})
+	if c, ok := RunCost(tr.JSON()); !ok || c < 6.209 || c > 6.211 {
+		t.Errorf("費用: %v %v", c, ok)
+	}
+	tr.Record("overview", &Usage{Input: 10, Model: "gpt-x"})
+	if _, ok := RunCost(tr.JSON()); ok {
+		t.Error("単価不明のモデルを含むのに確定扱い")
+	}
+}

@@ -60,6 +60,8 @@ func New(a *app.App, user, password string) (*Server, error) {
 		"usage":    ai.ParseUsageLine,
 		"list":     func(v ...string) []string { return v },
 		"inc":      func(i int) int { return i + 1 },
+		"usd":      usd,
+		"pct":      pct,
 		"stageLabel": func(s string) string {
 			return map[string]string{
 				"feed": "フィード本文", "page": "ページ本文", "fallback": "WebFetch/タイトル", "failed": "失敗",
@@ -72,7 +74,7 @@ func New(a *app.App, user, password string) (*Server, error) {
 			return map[string]string{digest.TriggerSchedule: "定時", digest.TriggerManual: "手動"}[s]
 		},
 	}
-	pages := []string{"day", "archive", "articles", "feeds", "settings", "profile", "profiles", "runs"}
+	pages := []string{"day", "archive", "articles", "feeds", "settings", "profile", "profiles", "runs", "saved"}
 	for _, p := range pages {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets,
 			"templates/layout.html", "templates/"+p+".html")
@@ -88,7 +90,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 	mux.HandleFunc("GET /{$}", s.home)
-	mux.HandleFunc("GET /go/{id}", s.goArticle)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.actionSaveSettings)
@@ -112,6 +113,11 @@ func (s *Server) Handler() http.Handler {
 	p("GET /feeds", s.feedsPage)
 	p("GET /feeds/export.opml", s.exportOPML)
 	p("GET /runs", s.runs)
+	p("GET /saved", s.savedPage)
+	p("POST /saved/toggle", s.actionToggleSaved)
+	p("GET /go/item/{id}", s.goItem)
+	p("GET /go/saved/{id}", s.goSaved)
+	p("GET /go/article/{id}", s.goReaderArticle)
 	p("GET /settings", s.profilePage)
 	p("POST /settings", s.actionSaveProfile)
 	p("POST /discord/test", s.actionTestDiscord)
@@ -334,6 +340,7 @@ type dayData struct {
 	Prev, Next string
 	Runs       []store.Run
 	HasFeeds   bool
+	Marks      map[string]store.SavedMark
 }
 
 func (s *Server) today(w http.ResponseWriter, r *http.Request, p config.Profile) {
@@ -402,9 +409,10 @@ func (s *Server) renderDay(w http.ResponseWriter, r *http.Request, p config.Prof
 		next = b.Today
 	}
 	feedList, _ := st.Feeds(ctx, p.ID)
+	marks, _ := st.SavedMarks(ctx, p.ID)
 	s.render(w, "day", dayData{
 		base: b, Date: date, IsToday: date == b.Today, Page: page, Exists: exists,
-		Groups: groups, Prev: prev, Next: next, Runs: runs, HasFeeds: len(feedList) > 0,
+		Groups: groups, Prev: prev, Next: next, Runs: runs, HasFeeds: len(feedList) > 0, Marks: marks,
 	})
 }
 
@@ -584,11 +592,13 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request, p config.Profi
 		NextURL    string
 		ToggleURL  string
 		CurrentURL string
+		Marks      map[string]store.SavedMark
 	}{
 		base: s.base(r, p, "articles", title), Articles: list, Groups: groupFeeds(allFeeds),
 		FeedID: feedID, Category: category, Unread: unread, Page: pageNo,
 		ToggleURL: prefix(p) + "/articles?" + toggle.Encode(), CurrentURL: link(pageNo),
 	}
+	data.Marks, _ = s.App.Store.SavedMarks(r.Context(), p.ID)
 	if pageNo > 1 {
 		data.PrevURL = link(pageNo - 1)
 	}
@@ -596,23 +606,6 @@ func (s *Server) articles(w http.ResponseWriter, r *http.Request, p config.Profi
 		data.NextURL = link(pageNo + 1)
 	}
 	s.render(w, "articles", data)
-}
-
-// goArticle は記事を既読にしてから元記事へ飛ばす。
-func (s *Server) goArticle(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	a, err := s.App.Store.Article(r.Context(), id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	_ = s.App.Store.MarkRead(r.Context(), id)
-	u, err := url.Parse(a.Link)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		http.Error(w, "記事URLが不正です", http.StatusBadRequest)
-		return
-	}
-	http.Redirect(w, r, a.Link, http.StatusFound)
 }
 
 func (s *Server) actionMarkRead(w http.ResponseWriter, r *http.Request, p config.Profile) {
@@ -826,16 +819,79 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type runRow struct {
+	store.Run
+	Cost      float64
+	CostKnown bool
+	React     store.RunReaction
+}
+
+// runSummary は直近 metricsDays 日の要約実行の集計。
+type runSummary struct {
+	Days         int
+	Runs         int
+	Cost         float64
+	CostPartial  bool // 単価の分からない実行を含む（その分は金額に入っていない）
+	Items        int
+	Opened       int
+	Saved        int
+	Useful       int
+	MissedSaved  int // 選ばれなかった候補を保存した件数
+	MissedOpened int // 選ばれなかった候補をRSSリーダーで開いた件数
+}
+
+const metricsDays = 30
+
+func (m runSummary) CostPer(n int) string {
+	if n == 0 || m.Runs == 0 {
+		return "—"
+	}
+	return usd(m.Cost / float64(n))
+}
+
 func (s *Server) runs(w http.ResponseWriter, r *http.Request, p config.Profile) {
-	list, err := s.App.Store.Runs(r.Context(), p.ID, 100)
+	ctx := r.Context()
+	since := time.Now().AddDate(0, 0, -metricsDays)
+	list, err := s.App.Store.Runs(ctx, p.ID, 1000)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
+	ids := make([]int64, len(list))
+	for i, run := range list {
+		ids[i] = run.ID
+	}
+	react, err := s.App.Store.RunReactions(ctx, p.ID, ids)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	sum := runSummary{Days: metricsDays}
+	var rows []runRow
+	for _, run := range list {
+		row := runRow{Run: run, React: react[run.ID]}
+		row.Cost, row.CostKnown = ai.RunCost(run.Usage)
+		if run.StartedAt.After(since) {
+			if run.Status != "running" && run.Usage != "" && run.Usage != "{}" {
+				sum.Runs++
+				sum.Cost += row.Cost
+				sum.CostPartial = sum.CostPartial || !row.CostKnown
+			}
+			sum.Items += row.React.Items
+			sum.Opened += row.React.Opened
+			sum.Saved += row.React.Saved
+			sum.Useful += row.React.Useful
+		}
+		if len(rows) < 100 {
+			rows = append(rows, row)
+		}
+	}
+	sum.MissedSaved, sum.MissedOpened, _ = s.App.Store.Missed(ctx, p.ID, since)
 	s.render(w, "runs", struct {
 		base
-		Runs []store.Run
-	}{s.base(r, p, "runs", p.Name+" 実行履歴"), list})
+		Runs    []runRow
+		Summary runSummary
+	}{s.base(r, p, "runs", p.Name+" 実行履歴"), rows, sum})
 }
 
 // ---- プロファイル ----
@@ -1306,6 +1362,20 @@ func (s *Server) ago(t time.Time) string {
 		return fmt.Sprintf("%d日前", int(d.Hours()/24))
 	}
 	return t.In(s.loc.Load()).Format("2006/01/02")
+}
+
+func usd(v float64) string {
+	if v < 1 {
+		return fmt.Sprintf("$%.3f", v)
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
+func pct(n, d int) string {
+	if d == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f%%", float64(n)*100/float64(d))
 }
 
 func snippet(s string, n int) string {

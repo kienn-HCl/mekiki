@@ -2,12 +2,17 @@ package feeds
 
 import (
 	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mmcdole/gofeed"
 
+	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/extract"
 	"github.com/kienn-HCl/mekiki/internal/store"
 )
@@ -171,5 +176,48 @@ func TestItemToArticle(t *testing.T) {
 	b := got[1]
 	if !b.PublishedAt.IsZero() || b.Image != "" {
 		t.Errorf("undated/no-image article: %+v", b)
+	}
+}
+
+func TestFetchAllOncePerURL(t *testing.T) {
+	var mu sync.Mutex
+	hits := map[string]int{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits[r.URL.Path]++
+		mu.Unlock()
+		w.Write([]byte(sampleRSS))
+	}))
+	defer ts.Close()
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	a, _ := st.CreateProfile(ctx, config.DefaultProfile("a", "A"))
+	b, _ := st.CreateProfile(ctx, config.DefaultProfile("b", "B"))
+	st.AddFeed(ctx, a, "共通", ts.URL+"/shared", "")
+	st.AddFeed(ctx, b, "共通", ts.URL+"/shared", "")
+	st.AddFeed(ctx, a, "別", ts.URL+"/other", "")
+
+	res, err := FetchAll(ctx, st, 0, Options{ArticlesPerFeed: 20, MaxFailures: 5, FailureRetryHours: 1}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits["/shared"] != 1 || hits["/other"] != 1 {
+		t.Errorf("リクエスト回数: %v", hits)
+	}
+	if res.Feeds != 3 || res.Added != 6 {
+		t.Errorf("結果: %+v", res)
+	}
+	for _, p := range []int64{a, b} {
+		feeds, _ := st.Feeds(ctx, p)
+		for _, f := range feeds {
+			if f.LastSuccess.IsZero() {
+				t.Errorf("取得成功が記録されていない: %+v", f)
+			}
+		}
 	}
 }

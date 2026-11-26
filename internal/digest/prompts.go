@@ -78,7 +78,8 @@ const overviewTemplate = `以下は今日のニュースダイジェストに載
 箇条書きのみを出力してください。前置き・後書き・見出しは不要です。
 `
 
-var selectSchema = map[string]any{
+// SelectSchema は選定応答のJSONスキーマ。
+var SelectSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"indexes": map[string]any{
@@ -106,7 +107,8 @@ func articleLines(articles []store.Article) string {
 	return strings.Join(lines, "\n")
 }
 
-func buildSelectPrompt(articles []store.Article, already []store.PageItem, pickCount int, criteria, memory string) string {
+// SelectPrompt は選定プロンプトを組み立てる（再生ツールからも使う）。
+func SelectPrompt(articles []store.Article, already []store.PageItem, pickCount int, criteria, memory string) string {
 	alreadyText := ""
 	if len(already) > 0 {
 		var b strings.Builder
@@ -125,7 +127,8 @@ func buildSelectPrompt(articles []store.Article, already []store.PageItem, pickC
 	).Replace(selectTemplate)
 }
 
-func buildSummaryPrompt(title, text, memory string) string {
+// SummaryPrompt は要約プロンプトを組み立てる（再生ツールからも使う）。
+func SummaryPrompt(title, text, memory string) string {
 	hint := ""
 	if strings.TrimSpace(memory) != "" {
 		hint = "\n読み手の興味（" + oneLine(memory, 300) + "）に関係する点があれば、それにも触れてください。"

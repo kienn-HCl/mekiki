@@ -24,11 +24,12 @@ type Request struct {
 }
 
 type Usage struct {
-	Input         int64 `json:"input"`
-	Output        int64 `json:"output"`
-	CacheRead     int64 `json:"cache_read"`
-	CacheCreation int64 `json:"cache_creation"`
-	Unknown       int   `json:"unknown,omitempty"` // usage不明の呼び出し回数
+	Input         int64  `json:"input"`
+	Output        int64  `json:"output"`
+	CacheRead     int64  `json:"cache_read"`
+	CacheCreation int64  `json:"cache_creation"`
+	Unknown       int    `json:"unknown,omitempty"` // usage不明の呼び出し回数
+	Model         string `json:"model,omitempty"`   // 応答したモデル（金額の推定用。段階ごとに最後の値）
 }
 
 type Response struct {
@@ -65,6 +66,9 @@ func (t *Tracker) Record(stage string, u *Usage) {
 		t.Stages[stage] = s
 	}
 	s.Calls++
+	if u != nil && u.Model != "" {
+		s.Model = u.Model
+	}
 	if u == nil {
 		s.Unknown++
 		return
@@ -98,7 +102,7 @@ func (t *Tracker) JSON() string {
 }
 
 var stageNames = []struct{ key, label string }{
-	{"select", "選定"}, {"summarize", "要約"}, {"summarize_fallback", "救済要約"}, {"overview", "まとめ"},
+	{"select", "選定"}, {"summarize", "要約"}, {"summarize_fallback", "救済要約"}, {"overview", "まとめ"}, {"judge", "採点"},
 }
 
 // Line は1行の使用量サマリ（ログ・Discord・Web表示用）。

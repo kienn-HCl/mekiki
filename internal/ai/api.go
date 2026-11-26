@@ -80,6 +80,7 @@ func (a *API) Complete(ctx context.Context, req Request) (Response, error) {
 		if err != nil {
 			return Response{Usage: total}, describeAPIError(err)
 		}
+		total.Model = string(msg.Model)
 		total.Input += msg.Usage.InputTokens
 		total.Output += msg.Usage.OutputTokens
 		total.CacheRead += msg.Usage.CacheReadInputTokens

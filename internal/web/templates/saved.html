@@ -1,0 +1,28 @@
+{{define "content"}}
+<h1>{{.Profile.Name}} 保存</h1>
+<nav class="tabs">
+  <a href="{{.Prefix}}/saved?kind=later" class="{{if eq .Kind "later"}}active{{end}}">後で読む <span class="count">{{index .Counts "later"}}</span></a>
+  <a href="{{.Prefix}}/saved?kind=favorite" class="{{if eq .Kind "favorite"}}active{{end}}">お気に入り <span class="count">{{index .Counts "favorite"}}</span></a>
+</nav>
+{{if not .Items}}
+<p class="muted">{{if eq .Kind "later"}}後で読む記事はありません。{{else}}お気に入りはありません。{{end}}
+今日のページやRSSの記事にある「{{if eq .Kind "later"}}後で読む{{else}}お気に入り{{end}}」ボタンで追加できます。</p>
+{{end}}
+<div class="cards">
+{{range .Items}}
+  {{$m := index $.Marks .NormLink}}
+  <article class="card" data-saved-kind="{{$.Kind}}">
+    {{if .Image}}<a class="thumb" href="{{$.Prefix}}/go/saved/{{.ID}}" target="_blank" rel="noopener noreferrer"><img src="{{.Image}}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>{{end}}
+    <div class="body">
+      <div class="meta">{{if .Category}}{{.Category}} / {{end}}{{.FeedName}}</div>
+      <h4><a href="{{$.Prefix}}/go/saved/{{.ID}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a></h4>
+      {{if .Summary}}<p class="summary">{{.Summary}}</p>{{end}}
+      <div class="cardfoot">
+        <span class="meta small">{{fmtTime .CreatedAt}} に保存</span>
+        {{template "savebtns" (list $.Prefix "saved" (print .ID) (print $m.Favorite) (print $m.Later))}}
+      </div>
+    </div>
+  </article>
+{{end}}
+</div>
+{{end}}

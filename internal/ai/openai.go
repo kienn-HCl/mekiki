@@ -73,6 +73,7 @@ type responseFormat struct {
 }
 
 type chatResponse struct {
+	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
 			Content *string `json:"content"`
@@ -132,7 +133,7 @@ func (c *OpenAICompat) Complete(ctx context.Context, req Request) (Response, err
 	ch := resp.Choices[0]
 	out := Response{}
 	if resp.Usage != nil {
-		out.Usage = &Usage{Input: resp.Usage.PromptTokens, Output: resp.Usage.CompletionTokens}
+		out.Usage = &Usage{Input: resp.Usage.PromptTokens, Output: resp.Usage.CompletionTokens, Model: resp.Model}
 		if d := resp.Usage.PromptTokensDetails; d != nil {
 			out.Usage.CacheRead = d.CachedTokens
 		}

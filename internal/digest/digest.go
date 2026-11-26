@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -32,13 +33,15 @@ const (
 
 	FailureMessage = "（要約の生成に失敗しました。記事本文をご確認ください）"
 
-	selectTimeout   = 5 * time.Minute
-	summaryTimeout  = 3 * time.Minute
+	SelectTimeout   = 5 * time.Minute
+	SummaryTimeout  = 3 * time.Minute
 	fallbackTimeout = 4 * time.Minute
 	overviewTimeout = 4 * time.Minute
 
 	summaryWorkers = 5
 	pageTimeout    = 15 * time.Second
+	pageCacheTTL   = 24 * time.Hour // 同じ記事ページをこの間は取り直さない
+	hostInterval   = time.Second    // 同じサイトへのリクエストの最小間隔
 	htmlMaxChars   = 200_000
 	textMaxChars   = 20_000
 	textMinChars   = 300 // これ未満しか本文が取れないときは次の手段に進む
@@ -171,6 +174,9 @@ type job struct {
 	run     *store.Run
 	tracker *ai.Tracker
 	backend ai.Backend
+
+	hostMu    sync.Mutex
+	hostLocks map[string]*sync.Mutex
 }
 
 func (j *job) do(ctx context.Context) error {
@@ -231,7 +237,7 @@ func (j *job) do(ctx context.Context) error {
 		}
 	}
 
-	picked, err := j.selectArticles(ctx, kept, existing)
+	picked, pickedIdx, err := j.selectArticles(ctx, kept, existing)
 	if err != nil {
 		// 選定に失敗した記事は「選定済み」にしない。次回の実行で再び候補になる
 		return fmt.Errorf("記事選定に失敗: %w", err)
@@ -265,6 +271,7 @@ func (j *job) do(ctx context.Context) error {
 			SummaryOK: res.ok,
 			Stage:     res.stage,
 			Image:     res.image,
+			Input:     res.input,
 		}
 	}
 	// 再作成ではここで今日のページを置き換える（選定・要約が成功するまで元のページを残す）
@@ -273,6 +280,9 @@ func (j *job) do(ctx context.Context) error {
 	}
 	if err := st.MarkConsidered(ctx, append(ids(kept), ids(dropped)...), j.date, j.run.ID); err != nil {
 		return err
+	}
+	if err := st.SaveRunCandidates(ctx, j.run.ID, j.prof.ID, kept, pickedIdx); err != nil {
+		slog.Warn("候補の記録に失敗", "err", err)
 	}
 	if len(items) == 0 {
 		j.run.Status = "skipped"
@@ -291,20 +301,26 @@ func (j *job) do(ctx context.Context) error {
 }
 
 // selectArticles は候補タイトル一覧を1回のAI呼び出しに渡して記事を選ばせる。
-func (j *job) selectArticles(ctx context.Context, candidates []store.Article, existing []store.PageItem) ([]store.Article, error) {
-	prompt := buildSelectPrompt(candidates, existing, j.prof.PickCount, j.prof.SelectCriteria, j.prof.UserMemory)
+// 選んだ記事と、その候補内の index（選ばれた順）を返す。
+func (j *job) selectArticles(ctx context.Context, candidates []store.Article, existing []store.PageItem) ([]store.Article, []int, error) {
+	prompt := SelectPrompt(candidates, existing, j.prof.PickCount, j.prof.SelectCriteria, j.prof.UserMemory)
 	resp, err := j.backend.Complete(ctx, ai.Request{
-		Stage: "select", Prompt: prompt, JSONSchema: selectSchema, Timeout: selectTimeout,
+		Stage: "select", Prompt: prompt, JSONSchema: SelectSchema, Timeout: SelectTimeout,
 	})
 	j.tracker.Record("select", resp.Usage)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	idx, err := ParseIndexes(resp.Text, len(candidates))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return PickByIndexes(candidates, idx, j.prof.PickCount), nil
+	idx = PickIndexes(candidates, idx, j.prof.PickCount)
+	picked := make([]store.Article, len(idx))
+	for i, k := range idx {
+		picked[i] = candidates[k]
+	}
+	return picked, idx, nil
 }
 
 // ParseIndexes は選定応答をパースし、範囲内のindexだけを返す（範囲外は無視）。
@@ -332,9 +348,9 @@ func ParseIndexes(text string, n int) ([]int, error) {
 	return out, nil
 }
 
-// PickByIndexes はindex順に記事を取り出す。正規化URLの重複は除き、最大limit件。
-func PickByIndexes(candidates []store.Article, idx []int, limit int) []store.Article {
-	var out []store.Article
+// PickIndexes は選定応答のindexから、正規化URLの重複を除いて最大limit件を選ばれた順に返す。
+func PickIndexes(candidates []store.Article, idx []int, limit int) []int {
+	var out []int
 	seen := map[string]bool{}
 	for _, i := range idx {
 		a := candidates[i]
@@ -342,7 +358,7 @@ func PickByIndexes(candidates []store.Article, idx []int, limit int) []store.Art
 			continue
 		}
 		seen[a.NormLink] = true
-		out = append(out, a)
+		out = append(out, i)
 		if len(out) >= limit {
 			break
 		}
@@ -356,6 +372,7 @@ type summaryResult struct {
 	ok      bool
 	stage   string // feed | page | fallback | failed
 	image   string
+	input   string // 要約に渡した本文（救済・失敗では空）
 }
 
 func (j *job) summarizeAll(ctx context.Context, picked []store.Article) []summaryResult {
@@ -384,7 +401,7 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 	fetch := func() {
 		if !pageTried {
 			pageTried = true
-			pageHTML = fetchPage(ctx, a.Link)
+			pageHTML = j.fetchPage(ctx, a.Link)
 		}
 	}
 
@@ -400,14 +417,14 @@ func (j *job) summarizeOne(ctx context.Context, a store.Article) summaryResult {
 
 	if len([]rune(text)) >= textMinChars {
 		resp, err := j.backend.Complete(ctx, ai.Request{
-			Stage: "summarize", Prompt: buildSummaryPrompt(a.Title, text, j.prof.UserMemory),
-			Timeout: summaryTimeout,
+			Stage: "summarize", Prompt: SummaryPrompt(a.Title, text, j.prof.UserMemory),
+			Timeout: SummaryTimeout,
 		})
 		j.tracker.Record("summarize", resp.Usage)
 		if err != nil {
 			slog.Warn("要約失敗", "url", a.Link, "err", err)
 		} else if resp.Text != "" {
-			res.summary, res.ok = resp.Text, true
+			res.summary, res.ok, res.input = resp.Text, true, text
 		}
 	} else {
 		// 本文がほぼ取れない → WebFetch救済（タイトルのみの要約もこのプロンプトが兼ねる）
@@ -490,6 +507,51 @@ func (j *job) postDiscord(ctx context.Context, items []store.PageItem) {
 	slog.Info("Discord投稿完了", "posted", len(posted), "total", len(embeds))
 	if err := c.SendContent(ctx, "-# "+j.tracker.Line()); err != nil {
 		slog.Warn("使用量サマリの送信失敗", "err", err)
+	}
+}
+
+// fetchPage は記事ページを取得する。取得結果（失敗も）は一定時間キャッシュし、
+// 同じサイトへは1件ずつ間隔を空けて取りに行く。
+func (j *job) fetchPage(ctx context.Context, link string) string {
+	st := j.r.Store
+	if html, ok := st.CachedPage(ctx, link, pageCacheTTL, time.Now()); ok {
+		return html
+	}
+	unlock := j.lockHost(link)
+	defer unlock()
+	if html, ok := st.CachedPage(ctx, link, pageCacheTTL, time.Now()); ok {
+		return html
+	}
+	html := fetchPage(ctx, link)
+	if ctx.Err() == nil {
+		if err := st.PutPageCache(ctx, link, html, time.Now()); err != nil {
+			slog.Warn("ページキャッシュの保存に失敗", "err", err)
+		}
+	}
+	return html
+}
+
+// lockHost はリンク先のホストへのリクエストを直列にする。解放は前回から hostInterval 経ってから。
+func (j *job) lockHost(link string) (unlock func()) {
+	host := link
+	if u, err := url.Parse(link); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	j.hostMu.Lock()
+	if j.hostLocks == nil {
+		j.hostLocks = map[string]*sync.Mutex{}
+	}
+	m, ok := j.hostLocks[host]
+	if !ok {
+		m = &sync.Mutex{}
+		j.hostLocks[host] = m
+	}
+	j.hostMu.Unlock()
+	m.Lock()
+	start := time.Now()
+	return func() {
+		time.Sleep(hostInterval - time.Since(start))
+		m.Unlock()
 	}
 }
 
