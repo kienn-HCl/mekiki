@@ -32,6 +32,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/config"
 	"github.com/kienn-HCl/mekiki/internal/digest"
 	"github.com/kienn-HCl/mekiki/internal/discord"
+	"github.com/kienn-HCl/mekiki/internal/eval"
 	"github.com/kienn-HCl/mekiki/internal/extract"
 	"github.com/kienn-HCl/mekiki/internal/feeds"
 	"github.com/kienn-HCl/mekiki/internal/store"
@@ -44,14 +45,16 @@ type Server struct {
 	App      *app.App
 	User     string // Basic認証のユーザー名
 	Password string // 空ならBasic認証なし
-	APIToken string // 設定すると GET /api/* を Authorization: Bearer で読めるようにする
+	APIToken string // 設定すると GET /api/* と POST /api/eval を Authorization: Bearer で使えるようにする
 	Version  string
 	tmpl     map[string]*template.Template
+	evalJobs *eval.Jobs
 	loc      atomic.Pointer[time.Location] // 時刻表示に使う設定のタイムゾーン
 }
 
 func New(a *app.App, user, password string) (*Server, error) {
-	s := &Server{App: a, User: user, Password: password, tmpl: map[string]*template.Template{}}
+	s := &Server{App: a, User: user, Password: password, tmpl: map[string]*template.Template{},
+		evalJobs: &eval.Jobs{Runner: &eval.Runner{Store: a.Store, NewBackend: app.NewBackend}}}
 	s.loc.Store(config.Defaults().Location())
 	funcs := template.FuncMap{
 		"fmtTime":  s.fmtTime,
@@ -94,6 +97,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/stats", s.stats)
+	mux.HandleFunc("POST /api/eval", s.actionStartEval)
+	mux.HandleFunc("GET /api/eval/{id}", s.evalJob)
 	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.actionSaveSettings)
 	mux.HandleFunc("POST /settings/test", s.actionTestAI)
@@ -176,7 +181,9 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.APIToken != "" && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") {
+		apiPath := (r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/")) ||
+			(r.Method == http.MethodPost && r.URL.Path == "/api/eval")
+		if s.APIToken != "" && apiPath {
 			token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if found && subtle.ConstantTimeCompare([]byte(token), []byte(s.APIToken)) == 1 {
 				next.ServeHTTP(w, r)

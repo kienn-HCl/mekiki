@@ -666,3 +666,33 @@ func TestStatsAPI(t *testing.T) {
 		t.Errorf("Basic認証で読めない: %d", code)
 	}
 }
+
+func TestEvalAPI(t *testing.T) {
+	ts, st := newServer(t, "")
+	seed(t, st)
+	resp, err := http.PostForm(ts.URL+"/api/eval", url.Values{"kind": {"summarize"}, "profile": {"main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job struct {
+		ID     int
+		Status string
+		Output string
+	}
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || job.ID == 0 {
+		t.Fatalf("開始: %d %+v", resp.StatusCode, job)
+	}
+	for i := 0; i < 200 && job.Status != "done" && job.Status != "failed"; i++ {
+		time.Sleep(10 * time.Millisecond)
+		_, body := get(t, ts, fmt.Sprintf("/api/eval/%d", job.ID))
+		json.Unmarshal([]byte(body), &job)
+	}
+	if job.Status != "done" || !strings.Contains(job.Output, "要約のやり直し") {
+		t.Errorf("結果: %+v", job)
+	}
+	if code, _ := get(t, ts, "/api/eval/999"); code != http.StatusNotFound {
+		t.Errorf("存在しない eval: %d", code)
+	}
+}

@@ -117,7 +117,7 @@ OpenAI互換APIは標準ライブラリのHTTPクライアントで直接呼ぶ�
 | `-data` / `MEKIKI_DATA` | `./data` | データディレクトリ |
 | `MEKIKI_PASSWORD` | なし | 設定するとBasic認証をかける |
 | `MEKIKI_USER` | `mekiki` | Basic認証のユーザー名 |
-| `MEKIKI_API_TOKEN` | なし | 設定すると `GET /api/*` を `Authorization: Bearer` で読める（§9） |
+| `MEKIKI_API_TOKEN` | なし | 設定すると `GET /api/*` と `POST /api/eval` を `Authorization: Bearer` で使える（§9） |
 | `ANTHROPIC_API_KEY` ほか | なし | 画面でAPIキーを設定していない場合に使う（経路ごとの環境変数は§7.1） |
 
 ### 4.2 全体設定（settingsテーブル。全プロファイル共通）
@@ -400,13 +400,15 @@ title と link の両方がある記事だけを扱う。
 | `/settings` | 全体設定（§4.2）とAI接続テスト |
 | `/api/status` | 取得中・要約実行中かのJSON |
 | `/api/stats` | 稼働状況と計測値のJSON（読み取り専用。§14）。`?days=` 集計期間、`?profile=` 絞り込み、`?runs=` 実行の件数 |
+| `POST /api/eval` | 再生ツール（§14）をバックグラウンドで始める。`GET /api/eval/{id}` で進み具合と結果を取る |
 
 - 取得・要約実行はボタンでバックグラウンドに開始し、画面上部に実行中の表示を出す。
   実行中は `/api/status` を3秒ごとに確認し、終わったら再読み込みする
 - フィード追加時にフィード名が空なら、フィード自体からタイトルを取る
 - 日付ページ・RSS・保存一覧の記事に「お気に入り」「後で読む」のボタンを付ける。押すと再読み込みせずに切り替わる
   （JavaScriptが無効ならフォーム送信で元の画面に戻る）
-- `MEKIKI_API_TOKEN` を設定すると、`GET /api/*` だけは `Authorization: Bearer <トークン>` でも読める（ツールやスクリプトからの取得用。画面や書き込みには使えない）
+- `MEKIKI_API_TOKEN` を設定すると、`GET /api/*` と `POST /api/eval` だけは `Authorization: Bearer <トークン>` でも使える
+  （ツールやスクリプト用。画面やほかの操作には使えない）。`POST /api/eval` はAIの費用を使いうる操作なので、トークンはそのつもりで扱う
 - 認証: `MEKIKI_PASSWORD` 設定時はBasic認証（ユーザー名 `MEKIKI_USER`、パスワードともに定数時間で比較）。POSTは `Origin`（なければ `Referer`）のホストが一致しないものを拒否する（CSRF対策）
 - 表示上のアプリ名は「mekiki」（左上にアイコン付き）。テンプレート・CSS・JSはバイナリに埋め込む。画像は記事サイトから直接読み込む（`referrerpolicy=no-referrer`）。
   ライト/ダーク両対応、スマートフォン幅でも横スクロールしないレイアウト。
@@ -505,6 +507,10 @@ APIキー・Webhook URLは含めない。履歴画面からもリンクする。
 - `select`: 実行ごとに、本番とやり直しの選定件数・的中（役に立った記事）・共通件数を並べ、
   合計の適合率・再現率・本番との一致（Jaccard）と、選定1回あたりの入力・費用を本番と比べる。
   本番で選ばれた記事は画面に出ているぶん開かれやすいので、適合率は本番に有利に出る
+- APIからも同じことができる（`POST /api/eval`。パラメータはフォーム値で `kind=select|summarize`・`profile`・`days`・`limit`・
+  `backend`・`model`・`effort`・`pick`・`max_chars`・`judge`・`run=1`）。数分かかることがあるのでバックグラウンドで動かし、
+  `GET /api/eval/{id}` で途中までの出力・集計・レポートを取る。同時に1つだけ、1回の問い合わせは300回まで、
+  `run=1` がなければ試算だけ。結果は直近20件をメモリに持つ（再起動で消える）
 - `summarize`: `-max-chars` で本文を切り詰めて要約し直し、本番の要約と並べたMarkdownのレポートを書く。
   `-judge MODEL` で、本番・やり直しの要約が本文に忠実かを5点満点で採点させる（採点には本番と同じ全文を使う）。
   要約1回あたりの入力・費用を本番（対象記事が載った実行の平均）と比べる

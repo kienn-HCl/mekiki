@@ -48,7 +48,7 @@ const usage = `mekiki — RSSの注目記事をAIが選んで要約するWebア�
   MEKIKI_CONFIG     設定ディレクトリ（-config の既定値。config.toml と feeds/*.opml を置く。既定はデータディレクトリ）
   MEKIKI_PASSWORD   設定するとWeb画面にBasic認証をかける
   MEKIKI_USER       Basic認証のユーザー名（既定 mekiki）
-  MEKIKI_API_TOKEN  設定すると GET /api/*（統計など）を Authorization: Bearer <トークン> で読める
+  MEKIKI_API_TOKEN  設定すると GET /api/*（統計など）と POST /api/eval を Authorization: Bearer <トークン> で使える
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
                     画面でAPIキーを設定していない場合に使うキー
 `
@@ -294,21 +294,7 @@ func evalCmd(args []string) error {
 		return err
 	}
 	cfg := config.Load(kv)
-	if *backend != "" {
-		cfg.Backend = *backend
-	}
-	if *model != "" {
-		if cfg.Backend == config.BackendCLI {
-			cfg.CLIModel = *model
-		} else {
-			cfg.Models[cfg.Backend] = *model
-		}
-	}
-	if *effort == "none" {
-		cfg.Efforts[cfg.Backend] = ""
-	} else if *effort != "" {
-		cfg.Efforts[cfg.Backend] = *effort
-	}
+	cfg = evalpkg.Override(cfg, *backend, *model, *effort)
 	opt := evalpkg.Options{
 		Profile: p, Settings: cfg, Since: time.Now().AddDate(0, 0, -*days), Limit: *limit, Pick: *pick,
 		MaxChars: *maxChars, Judge: *judge, Run: *run, Out: os.Stdout,

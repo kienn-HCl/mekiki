@@ -106,3 +106,40 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("費用の比較:\n%s", out.String())
 	}
 }
+
+func TestMaxCalls(t *testing.T) {
+	st, p := setup(t)
+	var calls atomic.Int32
+	opt := Options{Profile: p, Settings: config.Defaults(), Since: time.Now().Add(-time.Hour), Judge: "m",
+		Run: true, MaxCalls: 2, Out: &bytes.Buffer{}}
+	if _, err := runner(st, &calls).Summarize(context.Background(), opt, &bytes.Buffer{}); err == nil || calls.Load() != 0 {
+		t.Errorf("上限を超えるのに問い合わせた: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+func TestJobs(t *testing.T) {
+	st, p := setup(t)
+	var calls atomic.Int32
+	jobs := &Jobs{Runner: runner(st, &calls)}
+	job, err := jobs.Start("select", Options{Profile: p, Settings: config.Defaults(), Since: time.Now().Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := jobs.Get(job.ID)
+		if got.Status != "running" {
+			if got.Status != "done" || !strings.Contains(got.Output, "実際に問い合わせるには -run") || calls.Load() != 0 {
+				t.Errorf("試算の結果: %+v", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("終わらない")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := jobs.Start("bogus", Options{}); err == nil {
+		t.Error("不正な kind を受け付けた")
+	}
+}
