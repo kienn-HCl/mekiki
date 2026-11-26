@@ -364,8 +364,13 @@ func (s *Store) Signals(ctx context.Context, profileID int64) (map[string]Signal
 	return m, rows.Err()
 }
 
-// RunReaction は実行で載った記事への反応の件数。
-type RunReaction struct{ Items, Opened, Saved, Useful int } // Useful は開いたか保存した記事
+// RunReaction は実行で載った記事への反応の件数。Useful は開いたか保存した記事。
+type RunReaction struct {
+	Items  int `json:"items"`
+	Opened int `json:"opened"`
+	Saved  int `json:"saved"`
+	Useful int `json:"useful"`
+}
 
 // RunReactions は runIDs の実行ごとに、載った記事・開いた記事・保存した記事の件数を返す。
 func (s *Store) RunReactions(ctx context.Context, profileID int64, runIDs []int64) (map[int64]RunReaction, error) {
@@ -443,4 +448,67 @@ func (s *Store) Run(ctx context.Context, id int64) (Run, error) {
 		return Run{}, ErrNotFound
 	}
 	return list[0], nil
+}
+
+// ItemStages は since 以降に載った記事の要約元（feed / page / fallback / failed）ごとの件数。
+func (s *Store) ItemStages(ctx context.Context, profileID int64, since time.Time) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT stage, COUNT(*) FROM page_items
+		WHERE profile_id = ? AND created_at >= ? GROUP BY stage`, profileID, unix(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[string]int{}
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return nil, err
+		}
+		m[k] = n
+	}
+	return m, rows.Err()
+}
+
+// InputLengths は since 以降に要約へ渡した本文の文字数（記録が残っているもの）。
+func (s *Store) InputLengths(ctx context.Context, profileID int64, since time.Time) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT length(t.text) FROM item_inputs t JOIN page_items i ON i.id = t.item_id
+		WHERE i.profile_id = ? AND i.created_at >= ? ORDER BY 1`, profileID, unix(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// FeedPick はフィードごとの、選定に渡した候補の数と選ばれた数。
+type FeedPick struct{ Candidates, Picked int }
+
+// FeedPicks は since 以降に始まった実行の候補を、フィード名ごとに数える。
+func (s *Store) FeedPicks(ctx context.Context, profileID int64, since time.Time) (map[string]FeedPick, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.feed_name, COUNT(*), COUNT(c.picked_rank) FROM run_candidates c JOIN runs r ON r.id = c.run_id
+		WHERE c.profile_id = ? AND r.started_at >= ? GROUP BY c.feed_name`, profileID, unix(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[string]FeedPick{}
+	for rows.Next() {
+		var name string
+		var p FeedPick
+		if err := rows.Scan(&name, &p.Candidates, &p.Picked); err != nil {
+			return nil, err
+		}
+		m[name] = p
+	}
+	return m, rows.Err()
 }

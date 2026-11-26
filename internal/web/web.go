@@ -44,6 +44,8 @@ type Server struct {
 	App      *app.App
 	User     string // Basic認証のユーザー名
 	Password string // 空ならBasic認証なし
+	APIToken string // 設定すると GET /api/* を Authorization: Bearer で読めるようにする
+	Version  string
 	tmpl     map[string]*template.Template
 	loc      atomic.Pointer[time.Location] // 時刻表示に使う設定のタイムゾーン
 }
@@ -91,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.FileServerFS(assets))
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.actionSaveSettings)
 	mux.HandleFunc("POST /settings/test", s.actionTestAI)
@@ -173,6 +176,13 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.APIToken != "" && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") {
+			token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if found && subtle.ConstantTimeCompare([]byte(token), []byte(s.APIToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
 		user, pass, ok := r.BasicAuth()
 		// 両方を必ず比較して、どちらが違ったかを応答時間から推測させない
 		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.User)) == 1
@@ -828,16 +838,16 @@ type runRow struct {
 
 // runSummary は直近 metricsDays 日の要約実行の集計。
 type runSummary struct {
-	Days         int
-	Runs         int
-	Cost         float64
-	CostPartial  bool // 単価の分からない実行を含む（その分は金額に入っていない）
-	Items        int
-	Opened       int
-	Saved        int
-	Useful       int
-	MissedSaved  int // 選ばれなかった候補を保存した件数
-	MissedOpened int // 選ばれなかった候補をRSSリーダーで開いた件数
+	Days         int     `json:"days"`
+	Runs         int     `json:"runs"`
+	Cost         float64 `json:"cost_usd"`
+	CostPartial  bool    `json:"cost_partial"` // 単価の分からない実行を含む（その分は金額に入っていない）
+	Items        int     `json:"items"`
+	Opened       int     `json:"opened"`
+	Saved        int     `json:"saved"`
+	Useful       int     `json:"useful"`
+	MissedSaved  int     `json:"missed_saved"`  // 選ばれなかった候補を保存した件数
+	MissedOpened int     `json:"missed_opened"` // 選ばれなかった候補をRSSリーダーで開いた件数
 }
 
 const metricsDays = 30
@@ -850,12 +860,25 @@ func (m runSummary) CostPer(n int) string {
 }
 
 func (s *Server) runs(w http.ResponseWriter, r *http.Request, p config.Profile) {
-	ctx := r.Context()
-	since := time.Now().AddDate(0, 0, -metricsDays)
-	list, err := s.App.Store.Runs(ctx, p.ID, 1000)
+	rows, sum, err := s.runStats(r.Context(), p, metricsDays, 100)
 	if err != nil {
 		serverError(w, err)
 		return
+	}
+	s.render(w, "runs", struct {
+		base
+		Runs    []runRow
+		Summary runSummary
+	}{s.base(r, p, "runs", p.Name+" 実行履歴"), rows, sum})
+}
+
+// runStats は直近 days 日の集計と、新しい順に最大 keep 件の実行（費用・反応付き）を返す。
+func (s *Server) runStats(ctx context.Context, p config.Profile, days, keep int) ([]runRow, runSummary, error) {
+	since := time.Now().AddDate(0, 0, -days)
+	sum := runSummary{Days: days}
+	list, err := s.App.Store.Runs(ctx, p.ID, 1000)
+	if err != nil {
+		return nil, sum, err
 	}
 	ids := make([]int64, len(list))
 	for i, run := range list {
@@ -863,10 +886,8 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, p config.Profile) 
 	}
 	react, err := s.App.Store.RunReactions(ctx, p.ID, ids)
 	if err != nil {
-		serverError(w, err)
-		return
+		return nil, sum, err
 	}
-	sum := runSummary{Days: metricsDays}
 	var rows []runRow
 	for _, run := range list {
 		row := runRow{Run: run, React: react[run.ID]}
@@ -882,16 +903,12 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, p config.Profile) 
 			sum.Saved += row.React.Saved
 			sum.Useful += row.React.Useful
 		}
-		if len(rows) < 100 {
+		if len(rows) < keep {
 			rows = append(rows, row)
 		}
 	}
-	sum.MissedSaved, sum.MissedOpened, _ = s.App.Store.Missed(ctx, p.ID, since)
-	s.render(w, "runs", struct {
-		base
-		Runs    []runRow
-		Summary runSummary
-	}{s.base(r, p, "runs", p.Name+" 実行履歴"), rows, sum})
+	sum.MissedSaved, sum.MissedOpened, err = s.App.Store.Missed(ctx, p.ID, since)
+	return rows, sum, err
 }
 
 // ---- プロファイル ----
