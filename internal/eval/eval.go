@@ -29,6 +29,7 @@ type Options struct {
 	MaxChars int    // summarize: 要約に渡す本文の上限（0 なら保存されている全文）
 	Judge    string // summarize: 忠実性を採点するモデル（空なら採点しない）
 	Run      bool   // false なら問い合わせ内容と量を表示するだけで、AIには送らない
+	MaxCalls int    // 1回の実行で送ってよい問い合わせの上限（0なら無制限。キャッシュ済みの分も数える）
 	Out      io.Writer
 }
 
@@ -39,6 +40,39 @@ type Runner struct {
 	backend ai.Backend
 	tracker *ai.Tracker
 	cached  int
+}
+
+// Override は経路・モデル・effort を上書きした設定を返す（空なら上書きしない。effort の "none" は送らない）。
+func Override(s config.Settings, backend, model, effort string) config.Settings {
+	clone := func(m map[string]string) map[string]string {
+		out := map[string]string{}
+		for k, v := range m {
+			out[k] = v
+		}
+		return out
+	}
+	s.Models, s.Efforts = clone(s.Models), clone(s.Efforts)
+	if backend != "" {
+		s.Backend = backend
+	}
+	if model != "" {
+		s = withModel(s, model)
+	}
+	switch effort {
+	case "":
+	case "none":
+		s.Efforts[s.Backend] = ""
+	default:
+		s.Efforts[s.Backend] = effort
+	}
+	return s
+}
+
+func checkCalls(opt Options, calls int) error {
+	if opt.Run && opt.MaxCalls > 0 && calls > opt.MaxCalls {
+		return fmt.Errorf("問い合わせが上限を超えます（%d回 > %d回）。期間や件数を絞ってください", calls, opt.MaxCalls)
+	}
+	return nil
 }
 
 func (r *Runner) setup(opt Options) error {

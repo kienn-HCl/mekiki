@@ -11,6 +11,7 @@ RSS/Atomフィードを集め、AIが注目記事を選んで日本語で要約�
 - **RSSリーダー（サブ）**: 取得した記事をフィード・カテゴリ別に一覧できる。取得は定期実行＋「今すぐ取得」ボタン
 - **お気に入り・後で読む**: 日付ページやRSSの記事をボタンひとつで保存し、「保存」画面で読み返せる
 - **計測**: 実行ごとのAI費用（推定）や、載った記事を開いた・保存した割合を履歴画面に出す。
+  同じ情報（とフィードごとの選定状況など）を `GET /api/stats` でJSONでも取れる。
   `mekiki eval` で、記録済みの候補・本文を使って設定を変えた選定・要約をやり直し、本番と比べられる
 - **AI連携**: 次から選べる（全プロファイル共通）
   - Anthropic API（デフォルト）
@@ -68,6 +69,7 @@ MEKIKI_PASSWORD=好きなパスワード ./mekiki serve -addr :8080 -data ./data
 | `-data` / `MEKIKI_DATA` | データディレクトリ（既定 `./data`）。`mekiki.db` が作られる |
 | `MEKIKI_PASSWORD` | 設定するとBasic認証をかける。**外部に公開するなら必ず設定する** |
 | `MEKIKI_USER` | Basic認証のユーザー名（既定 `mekiki`） |
+| `MEKIKI_API_TOKEN` | 設定すると統計API（`GET /api/stats` など）と再生ツールのAPI（`POST /api/eval`）を `Authorization: Bearer <トークン>` で使える。画面やほかの操作には使えない。eval はAIの費用を使いうるので扱いに注意 |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_COMPAT_API_KEY` | 画面でAPIキーを入れない場合に使うキー |
 
 Basic認証は通信を暗号化しないので、インターネット越しに使う場合はHTTPS化したリバースプロキシ
@@ -134,7 +136,7 @@ mekiki eval select [-model M] [-effort E] [-run]  # 記録済みの候補で選�
 mekiki eval summarize [-max-chars N] [-judge M] [-run]  # 記録済みの本文で要約をやり直し、本番と並べる
 ```
 
-`eval` は記事のページやフィードにはアクセスせず、`-run` を付けるまではAIにも問い合わせない（回数と費用の目安だけ出す）。
+`eval` はAPI（`POST /api/eval`）からも動かせる。記事のページやフィードにはアクセスせず、`-run` を付けるまではAIにも問い合わせない（回数と費用の目安だけ出す）。
 同じ問い合わせの応答はDBに保存して使い回す。詳しくは [docs/SPEC.md](docs/SPEC.md) の§14。
 
 `-profile` を省略すると最初のプロファイルが対象。いずれも `-data` でデータディレクトリを指定する。`fetch` / `digest` はサーバとは別プロセスで動くため、

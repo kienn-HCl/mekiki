@@ -84,6 +84,9 @@ func (r *Runner) Select(ctx context.Context, opt Options) (*SelectReport, error)
 		printPlan(opt.Out, opt.Settings, len(jobs), prompts, 200)
 		return nil, nil
 	}
+	if err := checkCalls(opt, len(jobs)); err != nil {
+		return nil, err
+	}
 
 	var prod ai.StageTotal
 	for _, j := range jobs {

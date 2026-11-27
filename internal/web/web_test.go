@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -584,5 +585,114 @@ func TestSavedAndOpens(t *testing.T) {
 	_, body = get(t, ts, "/p/main/")
 	if !strings.Contains(body, "/p/main/go/item/") {
 		t.Error("日付ページのリンクが記録用のURLになっていない")
+	}
+}
+
+func TestStatsAPI(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := app.New(st)
+	a.Conf = conffile.New(st, t.TempDir())
+	if err := a.Conf.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	kv, _ := st.Settings(ctx)
+	cfg := config.Load(kv)
+	cfg.APIKeys[config.BackendAnthropic] = "sk-ant-secret"
+	st.SetSettings(ctx, cfg.Map())
+	seed(t, st)
+	srv, _ := New(a, "me", "pw")
+	srv.APIToken, srv.Version = "tok", "v9"
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	do := func(path, auth string) (int, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var b strings.Builder
+		_, _ = io.Copy(&b, resp.Body)
+		return resp.StatusCode, b.String()
+	}
+	if code, _ := do("/api/stats", ""); code != http.StatusUnauthorized {
+		t.Errorf("認証なしで読めた: %d", code)
+	}
+	if code, _ := do("/p/main/", "Bearer tok"); code != http.StatusUnauthorized {
+		t.Errorf("トークンで画面まで読めた: %d", code)
+	}
+	code, body := do("/api/stats?days=7", "Bearer tok")
+	if code != 200 {
+		t.Fatalf("トークンで読めない: %d %s", code, body)
+	}
+	if strings.Contains(body, "sk-ant-secret") {
+		t.Error("APIキーが含まれている")
+	}
+	var out struct {
+		Version string
+		Days    int
+		AI      struct {
+			Backend string
+			KeySet  bool `json:"key_set"`
+		}
+		Profiles []struct {
+			Slug       string
+			Summary    struct{ Items int }
+			ItemStages map[string]int `json:"item_stages"`
+			Feeds      []struct{ Title string }
+			Runs       []struct{ ID int64 }
+		}
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Version != "v9" || out.Days != 7 || !out.AI.KeySet || len(out.Profiles) != 1 {
+		t.Fatalf("内容: %+v", out)
+	}
+	p := out.Profiles[0]
+	if p.Summary.Items != 1 || p.ItemStages["feed"] != 1 || len(p.Feeds) != 1 || len(p.Runs) != 1 {
+		t.Errorf("プロファイルの内容: %+v", p)
+	}
+	if code, _ := do("/api/stats", "Basic "+base64.StdEncoding.EncodeToString([]byte("me:pw"))); code != 200 {
+		t.Errorf("Basic認証で読めない: %d", code)
+	}
+}
+
+func TestEvalAPI(t *testing.T) {
+	ts, st := newServer(t, "")
+	seed(t, st)
+	resp, err := http.PostForm(ts.URL+"/api/eval", url.Values{"kind": {"summarize"}, "profile": {"main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job struct {
+		ID     int
+		Status string
+		Output string
+	}
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || job.ID == 0 {
+		t.Fatalf("開始: %d %+v", resp.StatusCode, job)
+	}
+	for i := 0; i < 200 && job.Status != "done" && job.Status != "failed"; i++ {
+		time.Sleep(10 * time.Millisecond)
+		_, body := get(t, ts, fmt.Sprintf("/api/eval/%d", job.ID))
+		json.Unmarshal([]byte(body), &job)
+	}
+	if job.Status != "done" || !strings.Contains(job.Output, "要約のやり直し") {
+		t.Errorf("結果: %+v", job)
+	}
+	if code, _ := get(t, ts, "/api/eval/999"); code != http.StatusNotFound {
+		t.Errorf("存在しない eval: %d", code)
 	}
 }

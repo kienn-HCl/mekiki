@@ -87,6 +87,13 @@ func (r *Runner) Summarize(ctx context.Context, opt Options, report io.Writer) (
 		}
 		return nil, nil
 	}
+	calls := len(items)
+	if opt.Judge != "" {
+		calls *= 3
+	}
+	if err := checkCalls(opt, calls); err != nil {
+		return nil, err
+	}
 	judgeEffort := ""
 	if opt.Judge != "" {
 		js := withModel(opt.Settings, opt.Judge)
