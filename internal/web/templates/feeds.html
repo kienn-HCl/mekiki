@@ -36,6 +36,7 @@
       <div class="muted small url">{{.Feed.URL}}</div>
     </div>
     <div class="reviewact">
+      <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/fetch"><input type="hidden" name="back" value="{{$.Prefix}}/feeds"><button class="small">今すぐ取得</button></form>
       <a class="button small" href="#feed-{{.Feed.ID}}">直す</a>
       <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/delete" onsubmit="return confirm('「{{.Feed.Title}}」を削除しますか？（取得済みの記事も消えます）')">
         <button class="danger small">削除</button>
@@ -62,6 +63,7 @@
       <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">開く</a>
       <span>記事{{.ArticleCount}}件 · 最終成功 {{ago .LastSuccess}}</span>
       {{if .Failures}}<span class="warn">連続失敗{{.Failures}}回: {{.LastError}}</span>{{end}}
+      <form method="post" action="{{$.Prefix}}/feeds/{{.ID}}/fetch" class="inline"><input type="hidden" name="back" value="{{$.Prefix}}/feeds#feed-{{.ID}}"><button class="mini">今すぐ取得</button></form>
     </div>
     <form method="post" action="{{$.Prefix}}/feeds/{{.ID}}/delete" onsubmit="return confirm('「{{.Title}}」を削除しますか？（取得済みの記事も消えます）')">
       <button class="danger small">削除</button>

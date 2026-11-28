@@ -179,6 +179,21 @@ func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options
 		}
 		targets = append(targets, f)
 	}
+	err = fetchTargets(ctx, st, targets, opt, now, &res)
+	res.Duration = time.Since(start)
+	return res, err
+}
+
+// FetchFeeds は指定したフィードを、連続失敗でスキップ中かどうかに関係なく取得する（手動の再取得用）。
+func FetchFeeds(ctx context.Context, st *store.Store, list []store.Feed, opt Options, now time.Time) (Result, error) {
+	start := time.Now()
+	var res Result
+	err := fetchTargets(ctx, st, list, opt, now, &res)
+	res.Duration = time.Since(start)
+	return res, err
+}
+
+func fetchTargets(ctx context.Context, st *store.Store, targets []store.Feed, opt Options, now time.Time, res *Result) error {
 	res.Feeds = len(targets)
 
 	// 同じURLは1回だけ取得し、同じホストのURLは1つのワーカーが間隔を空けて順に取得する
@@ -234,12 +249,12 @@ func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options
 				res.Failed++
 				slog.Warn("フィード取得失敗", "feed", f.Title, "failures", f.Failures+1, "err", o.err)
 				if err := st.MarkFeedFailure(ctx, f.ID, o.err.Error(), now); err != nil {
-					return res, err
+					return err
 				}
 				continue
 			}
 			if err := st.MarkFeedSuccess(ctx, f.ID, o.etag, o.lastMod, now, o.notModified); err != nil {
-				return res, err
+				return err
 			}
 			if o.notModified {
 				continue
@@ -255,13 +270,12 @@ func FetchAll(ctx context.Context, st *store.Store, profileID int64, opt Options
 			}
 			n, err := st.InsertArticles(ctx, articles)
 			if err != nil {
-				return res, err
+				return err
 			}
 			res.Added += n
 		}
 	}
-	res.Duration = time.Since(start)
-	return res, nil
+	return nil
 }
 
 func hostOf(raw string) string {

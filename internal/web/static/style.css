@@ -259,3 +259,4 @@ table.runs th, table.runs td:nth-child(-n+8) { white-space: nowrap; }
 .reviewact { display: flex; gap: 6px; flex: none; }
 .reviewact form { margin: 0; }
 .feedrow:target { outline: 2px solid var(--accent); }
+.feedinfo form.inline { margin: 0; }

@@ -785,3 +785,36 @@ func TestAPITokenWithoutPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchOneFeed(t *testing.T) {
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ok.xml" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>記事その1のタイトル</title><link>https://ok.example/1</link></item></channel></rss>`))
+	}))
+	defer feedSrv.Close()
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	st.AddFeed(ctx, 1, "直したフィード", feedSrv.URL+"/ok.xml", "")
+	st.AddFeed(ctx, 1, "壊れたフィード", feedSrv.URL+"/gone.xml", "")
+	feeds, _ := st.Feeds(ctx, 1)
+	for range 10 {
+		st.MarkFeedFailure(ctx, feeds[0].ID, "HTTP 404", time.Now())
+	}
+
+	loc := post(t, ts, fmt.Sprintf("/p/main/feeds/%d/fetch", feeds[0].ID), url.Values{"back": {"/p/main/feeds#feed-1"}})
+	if !strings.Contains(loc, "msg=") || !strings.HasSuffix(loc, "#feed-1") {
+		t.Errorf("取得成功の戻り先: %s", loc)
+	}
+	feeds, _ = st.Feeds(ctx, 1)
+	if feeds[0].Failures != 0 || feeds[0].ArticleCount != 1 {
+		t.Errorf("スキップ中のフィードを取り直せていない: %+v", feeds[0])
+	}
+	loc = post(t, ts, fmt.Sprintf("/p/main/feeds/%d/fetch", feeds[1].ID), url.Values{})
+	if u, _ := url.Parse(loc); !strings.Contains(u.Query().Get("err"), "HTTP 404") {
+		t.Errorf("取得失敗の表示: %s", loc)
+	}
+}
