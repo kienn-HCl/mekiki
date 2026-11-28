@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	p("POST /feeds/{id}/update", s.actionUpdateFeed)
 	p("POST /feeds/{id}/delete", s.actionDeleteFeed)
 	p("POST /feeds/{id}/fetch", s.actionFetchFeed)
+	p("POST /feeds/bulk", s.actionBulkFeeds)
 	p("POST /feeds/reset", s.actionResetFailures)
 	return s.auth(sameOrigin(s.saveConfigAfterPost(mux)))
 }
@@ -666,7 +667,7 @@ func (s *Server) feedsPage(w http.ResponseWriter, r *http.Request, p config.Prof
 		Count       int
 		Categories  []string
 		MaxFailures int
-		Review      []feedReview
+		Review      []reviewGroup
 	}{s.base(r, p, "feeds", p.Name+" フィード管理"), groupFeeds(list), len(list), cats, cfg.MaxFailures,
 		reviewFeeds(list, picks, cfg.MaxFailures, time.Now())})
 }
@@ -677,31 +678,91 @@ type feedReview struct {
 	Reason string
 }
 
+// reviewGroup は見直し候補を理由ごとにまとめたもの。
+type reviewGroup struct {
+	Key   string
+	Title string
+	Items []feedReview
+}
+
 const (
 	// reviewMinCandidates は「選ばれない」と判断するのに要る、直近 metricsDays 日の候補数。
 	reviewMinCandidates = 20
-	// reviewStaleDays は「更新が止まっている」と判断する、最新の投稿からの日数。
-	reviewStaleDays = 180
+	// reviewStaleYears・reviewOldYears は「更新が止まっている」とみなす、最新の投稿からの年数。
+	reviewStaleYears = 1
+	reviewOldYears   = 3
 )
 
-// reviewFeeds は有効なフィードのうち、スキップ中のもの・最新の投稿が reviewStaleDays 日より前のもの・
-// 候補に出ても直近 metricsDays 日に一度も選ばれていないものを、この順に返す。
-func reviewFeeds(list []store.Feed, picks map[string]store.FeedPick, maxFailures int, now time.Time) []feedReview {
-	var failing, stale, unpicked []feedReview
+// reviewFeeds は有効なフィードのうち、消すか見直すとよさそうなものを理由ごとに返す（空のグループは除く）。
+func reviewFeeds(list []store.Feed, picks map[string]store.FeedPick, maxFailures int, now time.Time) []reviewGroup {
+	groups := []reviewGroup{
+		{Key: "failing", Title: "取得に失敗し続けている"},
+		{Key: "old", Title: fmt.Sprintf("%d年以上更新がない", reviewOldYears)},
+		{Key: "stale", Title: fmt.Sprintf("%d〜%d年更新がない", reviewStaleYears, reviewOldYears)},
+		{Key: "unpicked", Title: "候補に出ても選ばれない"},
+	}
 	for _, f := range list {
 		pk := picks[f.Title]
+		age := func(y int) bool { return !f.LastItemAt.IsZero() && f.LastItemAt.Before(now.AddDate(-y, 0, 0)) }
+		last := ""
+		if !f.LastItemAt.IsZero() {
+			last = fmt.Sprintf("最新の投稿が %s（%d日前）", f.LastItemAt.Format("2006-01-02"), int(now.Sub(f.LastItemAt).Hours()/24))
+		}
 		switch {
 		case !f.Enabled:
 		case f.Failures >= maxFailures:
-			failing = append(failing, feedReview{f, fmt.Sprintf("連続%d回失敗して取得をスキップ中: %s", f.Failures, f.LastError)})
-		case !f.LastItemAt.IsZero() && now.Sub(f.LastItemAt) > reviewStaleDays*24*time.Hour:
-			stale = append(stale, feedReview{f, fmt.Sprintf("最新の投稿が %s（%d日前）。更新が止まっている可能性",
-				f.LastItemAt.Format("2006-01-02"), int(now.Sub(f.LastItemAt).Hours()/24))})
+			groups[0].Items = append(groups[0].Items, feedReview{f, fmt.Sprintf("連続%d回失敗して取得をスキップ中: %s", f.Failures, f.LastError)})
+		case age(reviewOldYears):
+			groups[1].Items = append(groups[1].Items, feedReview{f, last})
+		case age(reviewStaleYears):
+			groups[2].Items = append(groups[2].Items, feedReview{f, last})
 		case pk.Candidates >= reviewMinCandidates && pk.Picked == 0:
-			unpicked = append(unpicked, feedReview{f, fmt.Sprintf("直近%d日、選定の候補に%d件出たが一度も選ばれていない", metricsDays, pk.Candidates)})
+			groups[3].Items = append(groups[3].Items, feedReview{f, fmt.Sprintf("直近%d日、選定の候補に%d件出たが一度も選ばれていない", metricsDays, pk.Candidates)})
 		}
 	}
-	return append(append(failing, stale...), unpicked...)
+	var out []reviewGroup
+	for _, g := range groups {
+		if len(g.Items) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// actionBulkFeeds は選んだフィードをまとめて削除する、または無効にする。
+func (s *Server) actionBulkFeeds(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/feeds"
+	if err := r.ParseForm(); err != nil {
+		back(w, r, fallback, "err", "フォームを読めません")
+		return
+	}
+	var ids []int64
+	for _, v := range r.Form["id"] {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		back(w, r, fallback, "err", "フィードを選んでください")
+		return
+	}
+	ctx := r.Context()
+	var err error
+	var done string
+	switch r.FormValue("action") {
+	case "delete":
+		err, done = s.App.Store.DeleteFeeds(ctx, p.ID, ids), "削除"
+	case "disable":
+		err, done = s.App.Store.SetFeedsEnabled(ctx, p.ID, ids, false), "無効に"
+	default:
+		back(w, r, fallback, "err", "操作が不正です")
+		return
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	back(w, r, fallback, "msg", fmt.Sprintf("%d件のフィードを%sしました", len(ids), done))
 }
 
 func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {

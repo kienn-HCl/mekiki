@@ -608,6 +608,34 @@ func (s *Store) DeleteFeed(ctx context.Context, profileID, id int64) error {
 	return err
 }
 
+// DeleteFeeds はプロファイルのフィードをまとめて削除する（取得済みの記事も消える）。
+func (s *Store) DeleteFeeds(ctx context.Context, profileID int64, ids []int64) error {
+	return s.eachFeed(ctx, `DELETE FROM feeds WHERE id = ? AND profile_id = ?`, profileID, ids)
+}
+
+// SetFeedsEnabled はプロファイルのフィードをまとめて有効・無効にする。
+func (s *Store) SetFeedsEnabled(ctx context.Context, profileID int64, ids []int64, enabled bool) error {
+	q := `UPDATE feeds SET enabled = 0 WHERE id = ? AND profile_id = ?`
+	if enabled {
+		q = `UPDATE feeds SET enabled = 1 WHERE id = ? AND profile_id = ?`
+	}
+	return s.eachFeed(ctx, q, profileID, ids)
+}
+
+func (s *Store) eachFeed(ctx context.Context, q string, profileID int64, ids []int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, q, id, profileID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) ResetFeedFailures(ctx context.Context, profileID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE feeds SET failures = 0 WHERE (? = 0 OR profile_id = ?)`, profileID, profileID)
