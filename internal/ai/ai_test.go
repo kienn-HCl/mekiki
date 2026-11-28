@@ -23,6 +23,12 @@ func TestLenientJSON(t *testing.T) {
 	if err := LenientJSON("結果: [3, 4]", &arr); err != nil || len(arr) != 2 {
 		t.Errorf("前置き付き配列: %v %v", err, arr)
 	}
+	// JSONの後に括弧を含む独り言が続く（実際に claude -p で起きた応答）
+	obj.Indexes = nil
+	text := "{\"indexes\": [396, 183]}\n\nWait — I need to verify indexes. 409 is wrong (see [3]). {maybe}"
+	if err := LenientJSON(text, &obj); err != nil || len(obj.Indexes) != 2 || obj.Indexes[0] != 396 {
+		t.Errorf("後書き付きJSON: %v %v", err, obj)
+	}
 	if err := LenientJSON("JSONなし", &arr); err == nil {
 		t.Error("JSONなしがエラーにならない")
 	}

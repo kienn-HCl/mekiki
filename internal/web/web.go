@@ -651,13 +651,44 @@ func (s *Server) feedsPage(w http.ResponseWriter, r *http.Request, p config.Prof
 			cats = append(cats, f.Category)
 		}
 	}
+	picks, _ := s.App.Store.FeedPicks(r.Context(), p.ID, time.Now().AddDate(0, 0, -metricsDays))
 	s.render(w, "feeds", struct {
 		base
 		Groups      []feedGroup
 		Count       int
 		Categories  []string
 		MaxFailures int
-	}{s.base(r, p, "feeds", p.Name+" フィード管理"), groupFeeds(list), len(list), cats, cfg.MaxFailures})
+		Review      []feedReview
+	}{s.base(r, p, "feeds", p.Name+" フィード管理"), groupFeeds(list), len(list), cats, cfg.MaxFailures,
+		reviewFeeds(list, picks, cfg.MaxFailures)})
+}
+
+// feedReview は消すか見直すとよさそうなフィードと、その理由。
+type feedReview struct {
+	Feed   store.Feed
+	Reason string
+}
+
+// reviewMinCandidates は「選ばれない」と判断するのに要る、直近 metricsDays 日の候補数。
+const reviewMinCandidates = 20
+
+// reviewFeeds は有効なフィードのうち、スキップ中のもの・記事が1件もないもの・
+// 候補に出ても直近 metricsDays 日に一度も選ばれていないものを、この順に返す。
+func reviewFeeds(list []store.Feed, picks map[string]store.FeedPick, maxFailures int) []feedReview {
+	var failing, empty, unpicked []feedReview
+	for _, f := range list {
+		pk := picks[f.Title]
+		switch {
+		case !f.Enabled:
+		case f.Failures >= maxFailures:
+			failing = append(failing, feedReview{f, fmt.Sprintf("連続%d回失敗して取得をスキップ中: %s", f.Failures, f.LastError)})
+		case f.ArticleCount == 0 && !f.LastSuccess.IsZero():
+			empty = append(empty, feedReview{f, "取得はできるが記事が1件もない（配信が止まっている可能性）"})
+		case pk.Candidates >= reviewMinCandidates && pk.Picked == 0:
+			unpicked = append(unpicked, feedReview{f, fmt.Sprintf("直近%d日、選定の候補に%d件出たが一度も選ばれていない", metricsDays, pk.Candidates)})
+		}
+	}
+	return append(append(failing, empty...), unpicked...)
 }
 
 func (s *Server) actionAddFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {

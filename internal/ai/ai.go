@@ -162,18 +162,23 @@ func StripCodeFence(text string) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-// LenientJSON はJSONをパースする。失敗したら最初の { / [ から対応する最後の } / ] までを切り出して再試行。
+// LenientJSON はJSONをパースする。前置きや後書き（JSONの後に続く独り言など）が付いていても、
+// 文中で最初に読めるJSONの値（{...} か [...]）を取り出す。
 func LenientJSON(text string, v any) error {
 	t := StripCodeFence(text)
 	if err := json.Unmarshal([]byte(t), v); err == nil {
 		return nil
 	}
-	for _, pair := range [][2]string{{"{", "}"}, {"[", "]"}} {
-		start, end := strings.Index(t, pair[0]), strings.LastIndex(t, pair[1])
-		if start != -1 && end > start {
-			if err := json.Unmarshal([]byte(t[start:end+1]), v); err == nil {
-				return nil
-			}
+	for i, c := range t {
+		if c != '{' && c != '[' {
+			continue
+		}
+		var raw json.RawMessage
+		if err := json.NewDecoder(strings.NewReader(t[i:])).Decode(&raw); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(raw, v); err == nil {
+			return nil
 		}
 	}
 	return fmt.Errorf("JSONとして解釈できません: %.200q", t)
