@@ -65,7 +65,7 @@ OpenAI互換APIは標準ライブラリのHTTPクライアントで直接呼ぶ�
 |---|---|
 | `settings` | 全体設定（key-value。§4.2） |
 | `profiles` | プロファイルとその設定（§4.3）。slug（URLに使うID）で一意 |
-| `feeds` | フィード。profile_id / title / url / category / enabled / etag / last_modified / failures / last_attempt / last_success / last_error。`(profile_id, url)` で一意（同じフィードを複数のプロファイルに登録できる） |
+| `feeds` | フィード。profile_id / title / url / category / enabled / etag / last_modified / failures / last_attempt / last_success / last_error / last_item_at（フィードに載っている記事のうち最新の投稿日時）。`(profile_id, url)` で一意（同じフィードを複数のプロファイルに登録できる） |
 | `articles` | 取得した記事。feed_id / title / link / norm_link（§5.4の正規化URL）/ published_at（不明ならNULL）/ fetched_at / body / image / read。`(feed_id, norm_link)` で一意 |
 | `considered` | 選定に一度でも渡した記事（article_id / date / run_id）。差分判定に使う |
 | `pages` | 日付ページ（profile_id / date `YYYY-MM-DD` / overview / created_at / updated_at）。`(profile_id, date)` が主キー |
@@ -83,8 +83,9 @@ OpenAI互換APIは標準ライブラリのHTTPクライアントで直接呼ぶ�
 - プロファイルを削除すると、そのフィード・記事・ページ・履歴も外部キーのカスケードで消える
 - `opens` / `saved` は正規化URLで記事を指すので、記事やページが消えても残る（計測の正解データになる）
 - `run_candidates` と `item_inputs` は90日（記事の保持日数がそれより長ければその日数）、`page_cache` は2日で消す
-- スキーマの版は `PRAGMA user_version` で持つ（現在2）。知らない版のDBでは起動しない。
-  表の追加のように古いDBにそのまま足せる変更は `CREATE TABLE IF NOT EXISTS` で起動時に作られるので版を上げない
+- スキーマの版は `PRAGMA user_version` で持つ（現在3）。知らない版のDBでは起動しない。
+  表の追加のように古いDBにそのまま足せる変更は `CREATE TABLE IF NOT EXISTS` で起動時に作られるので版を上げない。
+  列の追加などで版を上げるときは、DBを更新する手順を [UPGRADE.md](UPGRADE.md) に書く（本体に移行コードは入れない）
 
 ## 4. 設定
 
@@ -168,6 +169,9 @@ OpenAI互換APIは標準ライブラリのHTTPクライアントで直接呼ぶ�
 - リクエストヘッダ: `User-Agent: Mozilla/5.0 mekiki/2.0`、保存済みなら `If-None-Match` / `If-Modified-Since`
 - タイムアウト15秒。接続エラー・タイムアウト系は指数バックオフ＋ジッタで最大4回リトライ（HTTPエラー応答はリトライしない）
 - 304 Not Modified は成功扱い（記事の追加なし）
+- 取得のたびに、フィードに載っている記事のうち最新の投稿日時を `last_item_at` に記録する（304なら前回のまま）。
+  まだ知らないフィード（追加直後・URL変更直後）は、条件付きGETの検証子を送らずに中身まで取る
+- 投稿日時が保持日数（§5.5）より古い項目は記事として入れない（保持期間で消した記事を入れ直さないため）
 - 取得のきっかけ: 定期（設定の間隔）、RSS画面の「今すぐ取得」、要約実行の直前。同時に1つしか走らない
   （要約実行直前の取得は、実行中の取得が終わるのを待ってから行う）
 
@@ -196,7 +200,8 @@ title と link の両方がある記事だけを扱う。
 - フィード管理画面の各フィード（と見直し候補）に「今すぐ取得」を付け、そのフィードだけを、連続失敗でスキップ中でも取得し直せる。
   結果（新着の件数、または失敗の理由）を画面に出す。ほかの取得が動いているときは断る
 - フィード管理画面の上部に「見直し候補」として、有効なフィードのうち次のものを並べる（削除と、一覧の該当行への移動ボタン付き）:
-  スキップ中のもの、取得はできるが記事が1件もないもの、直近30日に選定の候補へ20件以上出て一度も選ばれていないもの
+  スキップ中のもの、最新の投稿が180日より前のもの（更新が止まっている）、直近30日に選定の候補へ20件以上出て一度も選ばれていないもの。
+  記事の件数は保持期間で減るので、更新が止まっているかは記事の件数ではなく `last_item_at` で判断する
 
 ### 5.4 URL正規化とdedup
 

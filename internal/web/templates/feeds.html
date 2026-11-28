@@ -61,7 +61,7 @@
     </form>
     <div class="feedinfo">
       <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">開く</a>
-      <span>記事{{.ArticleCount}}件 · 最終成功 {{ago .LastSuccess}}</span>
+      <span>記事{{.ArticleCount}}件 · 最新の投稿 {{if .LastItemAt.IsZero}}—{{else}}{{.LastItemAt.Format "2006-01-02"}}{{end}} · 最終成功 {{ago .LastSuccess}}</span>
       {{if .Failures}}<span class="warn">連続失敗{{.Failures}}回: {{.LastError}}</span>{{end}}
       <form method="post" action="{{$.Prefix}}/feeds/{{.ID}}/fetch" class="inline"><input type="hidden" name="back" value="{{$.Prefix}}/feeds#feed-{{.ID}}"><button class="mini">今すぐ取得</button></form>
     </div>

@@ -52,6 +52,7 @@ type statsFeed struct {
 	Failures    int       `json:"failures"`
 	LastError   string    `json:"last_error,omitempty"`
 	LastSuccess time.Time `json:"last_success,omitzero"`
+	LastItemAt  time.Time `json:"last_item_at,omitzero"` // フィードに載っている記事のうち最新の投稿日時
 }
 
 type statsRun struct {
@@ -210,7 +211,7 @@ func (s *Server) profileStats(r *http.Request, p config.Profile, days, keep int,
 		pk := picks[f.Title]
 		sp.Feeds = append(sp.Feeds, statsFeed{Title: f.Title, URL: f.URL, Category: f.Category, Enabled: f.Enabled,
 			Articles: f.ArticleCount, Candidates: pk.Candidates, Picked: pk.Picked, Failures: f.Failures,
-			LastError: f.LastError, LastSuccess: f.LastSuccess})
+			LastError: f.LastError, LastSuccess: f.LastSuccess, LastItemAt: f.LastItemAt})
 	}
 	return sp, nil
 }

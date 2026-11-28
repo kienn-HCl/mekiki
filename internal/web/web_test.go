@@ -705,14 +705,15 @@ func TestFeedReview(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	st.AddFeed(ctx, 1, "止まったフィード", "https://dead.example/rss", "")
-	st.AddFeed(ctx, 1, "空のフィード", "https://empty.example/rss", "")
+	st.AddFeed(ctx, 1, "止まったブログ", "https://empty.example/rss", "")
 	st.AddFeed(ctx, 1, "選ばれないフィード", "https://dull.example/rss", "")
 	st.AddFeed(ctx, 1, "元気なフィード", "https://ok.example/rss", "")
 	feeds, _ := st.Feeds(ctx, 1)
 	for range 5 {
 		st.MarkFeedFailure(ctx, feeds[0].ID, "HTTP 404", now)
 	}
-	st.MarkFeedSuccess(ctx, feeds[1].ID, "", "", now, false)
+	st.MarkFeedSuccess(ctx, feeds[1].ID, store.FeedFetched{LastItemAt: now.AddDate(-2, 0, 0)}, now)
+	st.MarkFeedSuccess(ctx, feeds[3].ID, store.FeedFetched{LastItemAt: now.AddDate(0, -2, 0)}, now)
 	runID, _ := st.StartRun(ctx, store.Run{ProfileID: 1, Date: "2026-11-28", Kind: "append", Trigger: "manual", StartedAt: now})
 	var cands []store.Article
 	for i := range 25 {
@@ -727,7 +728,7 @@ func TestFeedReview(t *testing.T) {
 		t.Fatalf("見直し候補がない: %.500s", body)
 	}
 	review := body[i:strings.Index(body, `class="cathead"`)]
-	for _, want := range []string{"止まったフィード", "連続5回失敗", "HTTP 404", "空のフィード", "選ばれないフィード", "候補に25件"} {
+	for _, want := range []string{"止まったフィード", "連続5回失敗", "HTTP 404", "止まったブログ", "日前）。更新が止まっている", "選ばれないフィード", "候補に25件"} {
 		if !strings.Contains(review, want) {
 			t.Errorf("見直し候補に %q がない", want)
 		}

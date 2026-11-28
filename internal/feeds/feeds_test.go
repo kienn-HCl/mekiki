@@ -3,6 +3,7 @@ package feeds
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -219,5 +220,51 @@ func TestFetchAllOncePerURL(t *testing.T) {
 				t.Errorf("取得成功が記録されていない: %+v", f)
 			}
 		}
+	}
+}
+
+func TestLastItemAtAndRetention(t *testing.T) {
+	now := time.Now().UTC()
+	rss := fmt.Sprintf(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>最近の記事のタイトル</title><link>https://ex.com/new</link><pubDate>%s</pubDate></item>
+<item><title>保持期間より古い記事</title><link>https://ex.com/old</link><pubDate>%s</pubDate></item>
+</channel></rss>`, now.Add(-time.Hour).Format(time.RFC1123Z), now.AddDate(0, 0, -40).Format(time.RFC1123Z))
+	var conditional []bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conditional = append(conditional, r.Header.Get("If-None-Match") != "")
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte(rss))
+	}))
+	defer ts.Close()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	st.EnsureProfile(ctx)
+	st.AddFeed(ctx, 1, "f", ts.URL, "")
+	opt := Options{ArticlesPerFeed: 20, MaxFailures: 5, FailureRetryHours: 1, RetentionDays: 30}
+
+	// 検証子だけ残っていて最新の投稿日時を知らない状態（例: 版を上げた直後）でも、中身を取りに行く
+	feeds, _ := st.Feeds(ctx, 1)
+	st.MarkFeedSuccess(ctx, feeds[0].ID, store.FeedFetched{ETag: `"v1"`}, now)
+	if _, err := FetchAll(ctx, st, 1, opt, now); err != nil {
+		t.Fatal(err)
+	}
+	feeds, _ = st.Feeds(ctx, 1)
+	f := feeds[0]
+	if f.ArticleCount != 1 || f.LastItemAt.Unix() != now.Add(-time.Hour).Unix() {
+		t.Errorf("記事 %d件（保持期間内の1件のはず）、最新の投稿 %v", f.ArticleCount, f.LastItemAt)
+	}
+	// 2回目は検証子を送り、304 なら最新の投稿日時はそのまま
+	FetchAll(ctx, st, 1, opt, now.Add(time.Hour))
+	feeds, _ = st.Feeds(ctx, 1)
+	if len(conditional) != 2 || conditional[0] || !conditional[1] || feeds[0].LastItemAt.IsZero() {
+		t.Errorf("条件付きGET %v、最新の投稿 %v", conditional, feeds[0].LastItemAt)
 	}
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,5 +39,18 @@ func TestFreshDBAndCandidatesPerProfile(t *testing.T) {
 	cb, _ := st.Candidates(ctx, b, now.Add(-time.Hour), "")
 	if len(ca) != 0 || len(cb) != 1 {
 		t.Errorf("候補: A=%d B=%d, want 0 and 1", len(ca), len(cb))
+	}
+}
+
+func TestOldVersionRefused(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.db.Exec("PRAGMA user_version = 2")
+	st.Close()
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "UPGRADE.md") {
+		t.Errorf("古い版のDBを開けてしまう、または手順を示さない: %v", err)
 	}
 }

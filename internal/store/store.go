@@ -17,7 +17,7 @@ import (
 	"github.com/kienn-HCl/mekiki/internal/config"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS feeds (
 	last_attempt  INTEGER,
 	last_success  INTEGER,
 	last_error    TEXT NOT NULL DEFAULT '',
+	last_item_at  INTEGER,                  -- フィードに載っている記事のうち最新の投稿日時（不明ならNULL）
 	position      INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(profile_id, url)
 );
@@ -230,7 +231,7 @@ func (s *Store) initSchema() error {
 		return err
 	}
 	if version != 0 && version != schemaVersion {
-		return fmt.Errorf("対応していないデータベースの版です（%d）", version)
+		return fmt.Errorf("対応していないデータベースの版です（%d。この mekiki は版%d）。版を上げる手順は docs/UPGRADE.md を参照", version, schemaVersion)
 	}
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("スキーマ作成に失敗: %w", err)
@@ -531,6 +532,7 @@ type Feed struct {
 	LastAttempt  time.Time
 	LastSuccess  time.Time
 	LastError    string
+	LastItemAt   time.Time // フィードに載っている記事のうち最新の投稿日時（ゼロ値 = 不明）
 	ArticleCount int
 	UnreadCount  int
 }
@@ -539,7 +541,7 @@ type Feed struct {
 func (s *Store) Feeds(ctx context.Context, profileID int64) ([]Feed, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT f.id, f.profile_id, f.title, f.url, f.category, f.enabled, f.etag, f.last_modified,
-		       f.failures, f.last_attempt, f.last_success, f.last_error,
+		       f.failures, f.last_attempt, f.last_success, f.last_error, f.last_item_at,
 		       (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id),
 		       (SELECT COUNT(*) FROM articles a WHERE a.feed_id = f.id AND a.read = 0)
 		FROM feeds f WHERE (? = 0 OR f.profile_id = ?)
@@ -551,13 +553,13 @@ func (s *Store) Feeds(ctx context.Context, profileID int64) ([]Feed, error) {
 	var out []Feed
 	for rows.Next() {
 		var f Feed
-		var la, ls sql.NullInt64
+		var la, ls, li sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.ProfileID, &f.Title, &f.URL, &f.Category, &f.Enabled, &f.ETag,
-			&f.LastModified, &f.Failures, &la, &ls, &f.LastError,
+			&f.LastModified, &f.Failures, &la, &ls, &f.LastError, &li,
 			&f.ArticleCount, &f.UnreadCount); err != nil {
 			return nil, err
 		}
-		f.LastAttempt, f.LastSuccess = fromUnix(la), fromUnix(ls)
+		f.LastAttempt, f.LastSuccess, f.LastItemAt = fromUnix(la), fromUnix(ls), fromUnix(li)
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -594,9 +596,10 @@ func (s *Store) UpdateFeed(ctx context.Context, profileID, id int64, title, url,
 			etag          = CASE WHEN url = ? THEN etag ELSE '' END,
 			last_modified = CASE WHEN url = ? THEN last_modified ELSE '' END,
 			failures      = CASE WHEN url = ? THEN failures ELSE 0 END,
-			last_error    = CASE WHEN url = ? THEN last_error ELSE '' END
+			last_error    = CASE WHEN url = ? THEN last_error ELSE '' END,
+			last_item_at  = CASE WHEN url = ? THEN last_item_at ELSE NULL END
 		WHERE id = ? AND profile_id = ?`,
-		title, category, enabled, url, url, url, url, url, id, profileID)
+		title, category, enabled, url, url, url, url, url, url, id, profileID)
 	return err
 }
 
@@ -611,17 +614,24 @@ func (s *Store) ResetFeedFailures(ctx context.Context, profileID int64) error {
 	return err
 }
 
-func (s *Store) MarkFeedSuccess(ctx context.Context, id int64, etag, lastModified string, now time.Time, keepValidators bool) error {
-	if keepValidators {
+// FeedFetched は取得に成功したときの結果。NotModified（304）なら検証子と最新の投稿日時は前回のまま。
+type FeedFetched struct {
+	ETag, LastModified string
+	LastItemAt         time.Time
+	NotModified        bool
+}
+
+func (s *Store) MarkFeedSuccess(ctx context.Context, id int64, r FeedFetched, now time.Time) error {
+	if r.NotModified {
 		_, err := s.db.ExecContext(ctx, `
 			UPDATE feeds SET failures = 0, last_attempt = ?, last_success = ?, last_error = ''
 			WHERE id = ?`, unix(now), unix(now), id)
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE feeds SET etag = ?, last_modified = ?, failures = 0,
+		UPDATE feeds SET etag = ?, last_modified = ?, last_item_at = ?, failures = 0,
 		       last_attempt = ?, last_success = ?, last_error = ''
-		WHERE id = ?`, etag, lastModified, unix(now), unix(now), id)
+		WHERE id = ?`, r.ETag, r.LastModified, nullUnix(r.LastItemAt), unix(now), unix(now), id)
 	return err
 }
 
