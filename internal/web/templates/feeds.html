@@ -25,26 +25,38 @@
 </form>
 
 {{if .Review}}
-<details class="review" open>
-  <summary>見直し候補 <span class="count">{{len .Review}}件</span></summary>
-  <p class="muted small">消すか、URLが変わっていないか確認するとよさそうなフィード。「直す」で下の一覧の該当行へ移動します。</p>
-  {{range .Review}}
-  <div class="reviewrow">
-    <div class="reviewinfo">
-      <strong>{{.Feed.Title}}</strong> <span class="muted small">{{.Feed.Category}}</span>
-      <div class="warn small">{{.Reason}}</div>
-      <div class="muted small url">{{.Feed.URL}}</div>
+<section class="review">
+  <h2>見直し候補</h2>
+  <p class="muted small">消すか、URLが変わっていないか確認するとよさそうなフィード。チェックしたものをまとめて削除・無効にできます（無効にしたフィードは一覧に残り、取得だけ止まります）。「直す」で下の一覧の該当行へ移動します。</p>
+  <form id="bulk-review" method="post" action="{{.Prefix}}/feeds/bulk" class="bulkbar">
+    <span class="muted small"><span data-bulk-count>0</span>件を選択中</span>
+    <button name="action" value="disable" class="small">無効にする</button>
+    <button name="action" value="delete" class="danger small" data-confirm="選んだフィードを削除しますか？（取得済みの記事も消えます）">削除</button>
+  </form>
+  {{range .Review}}{{$key := .Key}}
+  <details class="reviewgroup" {{if le (len .Items) 30}}open{{end}}>
+    <summary>{{.Title}} <span class="count">{{len .Items}}件</span>
+      <label class="check small"><input type="checkbox" data-select-group="{{.Key}}">すべて選択</label></summary>
+    {{range .Items}}
+    <div class="reviewrow">
+      <input type="checkbox" name="id" value="{{.Feed.ID}}" form="bulk-review" data-group="{{$key}}" aria-label="{{.Feed.Title}} を選ぶ">
+      <div class="reviewinfo">
+        <strong>{{.Feed.Title}}</strong> <span class="muted small">{{.Feed.Category}}</span>
+        <div class="warn small">{{.Reason}}</div>
+        <div class="muted small url">{{.Feed.URL}}</div>
+      </div>
+      <div class="reviewact">
+        <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/fetch"><input type="hidden" name="back" value="{{$.Prefix}}/feeds"><button class="small">今すぐ取得</button></form>
+        <a class="button small" href="#feed-{{.Feed.ID}}">直す</a>
+        <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/delete" onsubmit="return confirm('「{{.Feed.Title}}」を削除しますか？（取得済みの記事も消えます）')">
+          <button class="danger small">削除</button>
+        </form>
+      </div>
     </div>
-    <div class="reviewact">
-      <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/fetch"><input type="hidden" name="back" value="{{$.Prefix}}/feeds"><button class="small">今すぐ取得</button></form>
-      <a class="button small" href="#feed-{{.Feed.ID}}">直す</a>
-      <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/delete" onsubmit="return confirm('「{{.Feed.Title}}」を削除しますか？（取得済みの記事も消えます）')">
-        <button class="danger small">削除</button>
-      </form>
-    </div>
-  </div>
+    {{end}}
+  </details>
   {{end}}
-</details>
+</section>
 {{end}}
 
 {{range .Groups}}

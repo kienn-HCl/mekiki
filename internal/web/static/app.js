@@ -55,3 +55,30 @@ document.querySelectorAll("form.savebtn").forEach(function (form) {
       .finally(function () { btn.disabled = false; });
   });
 });
+
+// フィードの見直し候補：グループごとの「すべて選択」、選択数の表示、削除の確認
+(function () {
+  var form = document.getElementById("bulk-review");
+  if (!form) return;
+  var boxes = function (group) {
+    var sel = 'input[type=checkbox][name=id][form="bulk-review"]';
+    if (group) sel += '[data-group="' + group + '"]';
+    return Array.prototype.slice.call(document.querySelectorAll(sel));
+  };
+  var count = form.querySelector("[data-bulk-count]");
+  var update = function () { count.textContent = boxes().filter(function (b) { return b.checked; }).length; };
+  document.querySelectorAll("[data-select-group]").forEach(function (all) {
+    all.addEventListener("click", function (ev) { ev.stopPropagation(); });
+    all.addEventListener("change", function () {
+      boxes(all.dataset.selectGroup).forEach(function (b) { b.checked = all.checked; });
+      update();
+    });
+  });
+  boxes().forEach(function (b) { b.addEventListener("change", update); });
+  form.querySelectorAll("button[data-confirm]").forEach(function (btn) {
+    btn.addEventListener("click", function (ev) {
+      var n = boxes().filter(function (b) { return b.checked; }).length;
+      if (n > 0 && !confirm(n + "件の" + btn.dataset.confirm)) ev.preventDefault();
+    });
+  });
+})();

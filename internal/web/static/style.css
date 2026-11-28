@@ -252,9 +252,14 @@ table.runs th, table.runs td:nth-child(-n+8) { white-space: nowrap; }
 
 /* フィードの見直し候補 */
 .review { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 16px; margin: 16px 0; }
-.review summary { cursor: pointer; font-weight: 600; }
-.reviewrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
-.reviewinfo { min-width: 0; }
+.review h2 { margin: .4em 0; }
+.bulkbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: sticky; top: 56px; z-index: 1; background: var(--surface); padding: 6px 0; margin: 0; }
+.reviewgroup { border-top: 1px solid var(--border); padding: 4px 0; }
+.reviewgroup summary { cursor: pointer; font-weight: 600; padding: 6px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.reviewgroup summary .check { font-weight: 400; margin: 0; }
+.reviewrow > input[type=checkbox] { flex: none; width: 18px; height: 18px; }
+.reviewrow { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.reviewinfo { min-width: 0; flex: 1; }
 .reviewinfo .url { overflow-wrap: anywhere; }
 .reviewact { display: flex; gap: 6px; flex: none; }
 .reviewact form { margin: 0; }

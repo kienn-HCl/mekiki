@@ -728,7 +728,7 @@ func TestFeedReview(t *testing.T) {
 		t.Fatalf("見直し候補がない: %.500s", body)
 	}
 	review := body[i:strings.Index(body, `class="cathead"`)]
-	for _, want := range []string{"止まったフィード", "連続5回失敗", "HTTP 404", "止まったブログ", "日前）。更新が止まっている", "選ばれないフィード", "候補に25件"} {
+	for _, want := range []string{"止まったフィード", "連続5回失敗", "HTTP 404", "止まったブログ", "1〜3年更新がない", "最新の投稿が", "選ばれないフィード", "候補に25件"} {
 		if !strings.Contains(review, want) {
 			t.Errorf("見直し候補に %q がない", want)
 		}
@@ -817,5 +817,28 @@ func TestFetchOneFeed(t *testing.T) {
 	loc = post(t, ts, fmt.Sprintf("/p/main/feeds/%d/fetch", feeds[1].ID), url.Values{})
 	if u, _ := url.Parse(loc); !strings.Contains(u.Query().Get("err"), "HTTP 404") {
 		t.Errorf("取得失敗の表示: %s", loc)
+	}
+}
+
+func TestBulkFeeds(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	for _, n := range []string{"a", "b", "c", "d"} {
+		st.AddFeed(ctx, 1, n, "https://"+n+".example/rss", "")
+	}
+	feeds, _ := st.Feeds(ctx, 1)
+	id := func(i int) string { return fmt.Sprint(feeds[i].ID) }
+	if loc := post(t, ts, "/p/main/feeds/bulk", url.Values{"action": {"disable"}, "id": {id(0), id(1)}}); !strings.Contains(loc, "msg=") {
+		t.Fatalf("無効化: %s", loc)
+	}
+	if loc := post(t, ts, "/p/main/feeds/bulk", url.Values{"action": {"delete"}, "id": {id(2)}}); !strings.Contains(loc, "msg=") {
+		t.Fatalf("削除: %s", loc)
+	}
+	if loc := post(t, ts, "/p/main/feeds/bulk", url.Values{"action": {"delete"}}); !strings.Contains(loc, "err=") {
+		t.Errorf("何も選ばずに実行できた: %s", loc)
+	}
+	feeds, _ = st.Feeds(ctx, 1)
+	if len(feeds) != 3 || feeds[0].Enabled || feeds[1].Enabled || !feeds[2].Enabled {
+		t.Errorf("一括操作の結果: %+v", feeds)
 	}
 }
