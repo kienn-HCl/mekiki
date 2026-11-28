@@ -137,6 +137,7 @@ type Options struct {
 	ArticlesPerFeed   int
 	MaxFailures       int
 	FailureRetryHours int
+	RetentionDays     int // これより古い投稿は記事として入れない（保持期間で消したものを入れ直さないため）。0なら制限なし
 }
 
 type Result struct {
@@ -253,20 +254,28 @@ func fetchTargets(ctx context.Context, st *store.Store, targets []store.Feed, op
 				}
 				continue
 			}
-			if err := st.MarkFeedSuccess(ctx, f.ID, o.etag, o.lastMod, now, o.notModified); err != nil {
+			var articles []store.Article
+			var latest time.Time
+			for i, it := range o.items {
+				a, ok := itemToArticle(it, f, now)
+				if !ok {
+					continue
+				}
+				if a.PublishedAt.After(latest) {
+					latest = a.PublishedAt
+				}
+				if i >= opt.ArticlesPerFeed || (opt.RetentionDays > 0 && !a.PublishedAt.IsZero() &&
+					a.PublishedAt.Before(now.AddDate(0, 0, -opt.RetentionDays))) {
+					continue
+				}
+				articles = append(articles, a)
+			}
+			if err := st.MarkFeedSuccess(ctx, f.ID, store.FeedFetched{ETag: o.etag, LastModified: o.lastMod,
+				LastItemAt: latest, NotModified: o.notModified}, now); err != nil {
 				return err
 			}
 			if o.notModified {
 				continue
-			}
-			var articles []store.Article
-			for i, it := range o.items {
-				if i >= opt.ArticlesPerFeed {
-					break
-				}
-				if a, ok := itemToArticle(it, f, now); ok {
-					articles = append(articles, a)
-				}
 			}
 			n, err := st.InsertArticles(ctx, articles)
 			if err != nil {
@@ -287,12 +296,13 @@ func hostOf(raw string) string {
 
 // fetchOne は feeds（すべて同じURL）を1回のリクエストで取得する。
 // 条件付きGETの検証子は、全フィードで同じときだけ送る（違えば一部のフィードが新着を取りこぼすため）。
+// 最新の投稿日時をまだ知らないフィードがあれば、中身を見るために検証子を送らない。
 func fetchOne(ctx context.Context, client *http.Client, feeds []store.Feed) outcome {
 	o := outcome{feeds: feeds}
 	f := feeds[0]
 	etag, lastMod := f.ETag, f.LastModified
-	for _, g := range feeds[1:] {
-		if g.ETag != etag || g.LastModified != lastMod {
+	for _, g := range feeds {
+		if g.ETag != etag || g.LastModified != lastMod || g.LastItemAt.IsZero() {
 			etag, lastMod = "", ""
 		}
 	}

@@ -170,6 +170,7 @@ go run ./cmd/mekiki serve -data ./data
 ## ドキュメント
 
 [docs/SPEC.md](docs/SPEC.md) — 仕様書。設計判断の経緯・運用で踏んだ障害の記録は付録A。
+[docs/UPGRADE.md](docs/UPGRADE.md) — DBの版が上がったときの更新手順（版が合わないと mekiki は起動しない）。
 
 ## ライセンス
 

@@ -86,6 +86,11 @@ func (a *App) FetchNow(ctx context.Context, profileID int64) (feeds.Result, erro
 	return a.doFetch(ctx, profileID)
 }
 
+func fetchOptions(cfg config.Settings) feeds.Options {
+	return feeds.Options{ArticlesPerFeed: cfg.ArticlesPerFeed, MaxFailures: cfg.MaxFailures,
+		FailureRetryHours: cfg.FailureRetryHours, RetentionDays: cfg.RetentionDays}
+}
+
 // FetchFeed はプロファイルの1つのフィードを、スキップ中でも今すぐ取得する。取得中なら ErrFetchBusy。
 func (a *App) FetchFeed(ctx context.Context, profileID, feedID int64) (store.Feed, feeds.Result, error) {
 	if !a.fetchMu.TryLock() {
@@ -112,9 +117,7 @@ func (a *App) FetchFeed(ctx context.Context, profileID, feedID int64) (store.Fee
 	if err != nil {
 		return f, feeds.Result{}, err
 	}
-	res, err := feeds.FetchFeeds(ctx, a.Store, []store.Feed{f}, feeds.Options{
-		ArticlesPerFeed: cfg.ArticlesPerFeed, MaxFailures: cfg.MaxFailures, FailureRetryHours: cfg.FailureRetryHours,
-	}, time.Now())
+	res, err := feeds.FetchFeeds(ctx, a.Store, []store.Feed{f}, fetchOptions(cfg), time.Now())
 	if err != nil {
 		return f, res, err
 	}
@@ -155,11 +158,7 @@ func (a *App) doFetch(ctx context.Context, profileID int64) (feeds.Result, error
 		return feeds.Result{}, err
 	}
 	now := time.Now()
-	res, err := feeds.FetchAll(ctx, a.Store, profileID, feeds.Options{
-		ArticlesPerFeed:   cfg.ArticlesPerFeed,
-		MaxFailures:       cfg.MaxFailures,
-		FailureRetryHours: cfg.FailureRetryHours,
-	}, now)
+	res, err := feeds.FetchAll(ctx, a.Store, profileID, fetchOptions(cfg), now)
 	slog.Info("フィード取得完了", "profile", profileID, "feeds", res.Feeds, "failed", res.Failed,
 		"skipped", len(res.Skipped), "added", res.Added, "took", res.Duration.Round(time.Millisecond))
 	// 定期取得の間隔は全フィードの取得で数える
