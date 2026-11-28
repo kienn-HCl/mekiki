@@ -696,3 +696,43 @@ func TestEvalAPI(t *testing.T) {
 		t.Errorf("存在しない eval: %d", code)
 	}
 }
+
+func TestFeedReview(t *testing.T) {
+	ts, st := newServer(t, "")
+	ctx := context.Background()
+	now := time.Now()
+	st.AddFeed(ctx, 1, "止まったフィード", "https://dead.example/rss", "")
+	st.AddFeed(ctx, 1, "空のフィード", "https://empty.example/rss", "")
+	st.AddFeed(ctx, 1, "選ばれないフィード", "https://dull.example/rss", "")
+	st.AddFeed(ctx, 1, "元気なフィード", "https://ok.example/rss", "")
+	feeds, _ := st.Feeds(ctx, 1)
+	for range 5 {
+		st.MarkFeedFailure(ctx, feeds[0].ID, "HTTP 404", now)
+	}
+	st.MarkFeedSuccess(ctx, feeds[1].ID, "", "", now, false)
+	runID, _ := st.StartRun(ctx, store.Run{ProfileID: 1, Date: "2026-11-28", Kind: "append", Trigger: "manual", StartedAt: now})
+	var cands []store.Article
+	for i := range 25 {
+		link := fmt.Sprintf("https://dull.example/%d", i)
+		cands = append(cands, store.Article{Title: fmt.Sprint("記事", i), Link: link, NormLink: link, FeedName: "選ばれないフィード"})
+	}
+	st.SaveRunCandidates(ctx, runID, 1, cands, nil)
+
+	_, body := get(t, ts, "/p/main/feeds")
+	i := strings.Index(body, "見直し候補")
+	if i < 0 {
+		t.Fatalf("見直し候補がない: %.500s", body)
+	}
+	review := body[i:strings.Index(body, `class="cathead"`)]
+	for _, want := range []string{"止まったフィード", "連続5回失敗", "HTTP 404", "空のフィード", "選ばれないフィード", "候補に25件"} {
+		if !strings.Contains(review, want) {
+			t.Errorf("見直し候補に %q がない", want)
+		}
+	}
+	if strings.Contains(review, "元気なフィード") {
+		t.Error("問題のないフィードが見直し候補に出ている")
+	}
+	if strings.Index(review, "止まったフィード") > strings.Index(review, "選ばれないフィード") {
+		t.Error("スキップ中のフィードが先に並んでいない")
+	}
+}

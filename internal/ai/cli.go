@@ -82,6 +82,10 @@ func (c *CLI) Complete(ctx context.Context, req Request) (Response, error) {
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
+		// モデルごとの内訳。補助の処理で別のモデルが混ざることがあるので、出力の多いものを主なモデルとみなす
+		ModelUsage map[string]struct {
+			OutputTokens int64 `json:"outputTokens"`
+		} `json:"modelUsage"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		// JSONで返らなかった場合は生stdout全体を生成テキストとして扱う
@@ -98,6 +102,12 @@ func (c *CLI) Complete(ctx context.Context, req Request) (Response, error) {
 			CacheRead:     out.Usage.CacheReadInputTokens,
 			CacheCreation: out.Usage.CacheCreationInputTokens,
 			Model:         c.model,
+		}
+		var most int64 = -1
+		for name, m := range out.ModelUsage {
+			if m.OutputTokens > most {
+				resp.Usage.Model, most = name, m.OutputTokens
+			}
 		}
 	}
 	return resp, nil

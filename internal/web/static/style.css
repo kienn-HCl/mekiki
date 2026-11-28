@@ -80,7 +80,7 @@ button:hover, .button:hover { border-color: var(--muted); text-decoration: none;
 button:disabled { opacity: .5; cursor: not-allowed; }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 button.danger { color: var(--danger); }
-button.small { padding: 2px 10px; }
+button.small, .button.small { padding: 2px 10px; }
 button.wide { width: 100%; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 .actions form, form.inline { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
@@ -249,3 +249,13 @@ button.mini.on { color: var(--accent); border-color: var(--accent); background: 
 .metrics dt { font-size: .8em; color: var(--muted); }
 .metrics dd { margin: 0; font-weight: 600; }
 table.runs th, table.runs td:nth-child(-n+8) { white-space: nowrap; }
+
+/* フィードの見直し候補 */
+.review { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 16px; margin: 16px 0; }
+.review summary { cursor: pointer; font-weight: 600; }
+.reviewrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.reviewinfo { min-width: 0; }
+.reviewinfo .url { overflow-wrap: anywhere; }
+.reviewact { display: flex; gap: 6px; flex: none; }
+.reviewact form { margin: 0; }
+.feedrow:target { outline: 2px solid var(--accent); }

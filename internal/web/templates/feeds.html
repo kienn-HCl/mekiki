@@ -24,11 +24,33 @@
   <span class="muted small">連続{{.MaxFailures}}回失敗したフィードはスキップされます（設定の間隔で自動再試行）</span>
 </form>
 
+{{if .Review}}
+<details class="review" open>
+  <summary>見直し候補 <span class="count">{{len .Review}}件</span></summary>
+  <p class="muted small">消すか、URLが変わっていないか確認するとよさそうなフィード。「直す」で下の一覧の該当行へ移動します。</p>
+  {{range .Review}}
+  <div class="reviewrow">
+    <div class="reviewinfo">
+      <strong>{{.Feed.Title}}</strong> <span class="muted small">{{.Feed.Category}}</span>
+      <div class="warn small">{{.Reason}}</div>
+      <div class="muted small url">{{.Feed.URL}}</div>
+    </div>
+    <div class="reviewact">
+      <a class="button small" href="#feed-{{.Feed.ID}}">直す</a>
+      <form method="post" action="{{$.Prefix}}/feeds/{{.Feed.ID}}/delete" onsubmit="return confirm('「{{.Feed.Title}}」を削除しますか？（取得済みの記事も消えます）')">
+        <button class="danger small">削除</button>
+      </form>
+    </div>
+  </div>
+  {{end}}
+</details>
+{{end}}
+
 {{range .Groups}}
 <h2 class="cathead">{{if .Category}}{{.Category}}{{else}}（カテゴリなし）{{end}}</h2>
 <div class="feedtable">
   {{range .Feeds}}
-  <div class="feedrow{{if not .Enabled}} disabled{{end}}">
+  <div class="feedrow{{if not .Enabled}} disabled{{end}}" id="feed-{{.ID}}">
     <form method="post" action="{{$.Prefix}}/feeds/{{.ID}}/update" class="feededit">
       <input name="title" value="{{.Title}}" aria-label="フィード名">
       <input name="category" value="{{.Category}}" list="cats" aria-label="カテゴリ">
