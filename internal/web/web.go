@@ -177,18 +177,24 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 // ---- ミドルウェア ----
 
 func (s *Server) auth(next http.Handler) http.Handler {
-	if s.Password == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiPath := (r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/")) ||
-			(r.Method == http.MethodPost && r.URL.Path == "/api/eval")
-		if s.APIToken != "" && apiPath {
+		if s.APIToken != "" && strings.HasPrefix(r.URL.Path, "/api/") {
+			tokenUse := r.Method == http.MethodGet || (r.Method == http.MethodPost && r.URL.Path == "/api/eval")
 			token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if found && subtle.ConstantTimeCompare([]byte(token), []byte(s.APIToken)) == 1 {
+			if tokenUse && found && subtle.ConstantTimeCompare([]byte(token), []byte(s.APIToken)) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// 画面の保護を前段（Cloudflare Access など）に任せてパスワードを設定していなくても、
+			// APIはトークンなしでは使わせない。/api/status は画面の再読み込みの判定に使うので除く
+			if s.Password == "" && r.URL.Path != "/api/status" {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Authorization: Bearer <MEKIKI_API_TOKEN> が必要です"})
+				return
+			}
+		}
+		if s.Password == "" {
+			next.ServeHTTP(w, r)
+			return
 		}
 		user, pass, ok := r.BasicAuth()
 		// 両方を必ず比較して、どちらが違ったかを応答時間から推測させない
@@ -1255,7 +1261,7 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	next.CompatURL = strings.TrimSpace(r.FormValue("compat_url"))
 
-	next.CLIPath = strings.TrimSpace(r.FormValue("cli_path"))
+	next.CLIPath = cur.CLIPath // 任意のコマンドを実行させられるので、画面からは変えさせない（config.toml でだけ変える）
 	next.CLIModel = strings.TrimSpace(r.FormValue("cli_model"))
 	next.Efforts = map[string]string{}
 	for _, p := range config.Providers {
@@ -1271,9 +1277,6 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 	next.MaxFailures = n("max_failures", cur.MaxFailures)
 	next.FailureRetryHours = n("failure_retry_hours", cur.FailureRetryHours)
 	next.RetentionDays = n("retention_days", cur.RetentionDays)
-	if next.CLIPath == "" {
-		next.CLIPath = "claude"
-	}
 	if err := next.Validate(); err != nil {
 		back(w, r, "/settings", "err", err.Error())
 		return

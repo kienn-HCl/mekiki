@@ -298,3 +298,32 @@ func keys(b Bundle) []string {
 	}
 	return out
 }
+
+func TestCLIPathOnlyFromFile(t *testing.T) {
+	st, m, dir := setup(t)
+	ctx := context.Background()
+	cfg := filepath.Join(dir, "config.toml")
+	edited := strings.Replace(read(t, cfg), "path = 'claude'", "path = '/opt/claude/bin/claude'", 1)
+	if edited == read(t, cfg) {
+		t.Fatal("config.toml に path = 'claude' がない")
+	}
+	os.WriteFile(cfg, []byte(edited), 0o600)
+	st, m, err := restart(t, st, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kv, _ := st.Settings(ctx)
+	if p := config.Load(kv).CLIPath; p != "/opt/claude/bin/claude" {
+		t.Fatalf("設定ファイルのパスが反映されない: %q", p)
+	}
+	// 画面からの復元では変えない
+	b, _ := ExportBundle(ctx, st, false)
+	b["config.toml"] = []byte(strings.Replace(string(b["config.toml"]), "/opt/claude/bin/claude", "/bin/sh", 1))
+	if err := m.Restore(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	kv, _ = st.Settings(ctx)
+	if p := config.Load(kv).CLIPath; p != "/opt/claude/bin/claude" {
+		t.Errorf("復元で claude コマンドのパスが変わった: %q", p)
+	}
+}

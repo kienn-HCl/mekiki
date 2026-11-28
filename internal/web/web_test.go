@@ -181,7 +181,7 @@ func TestSaveGlobalSettings(t *testing.T) {
 	form := url.Values{
 		"backend": {"openrouter"}, "model.openrouter": {"openai/gpt-5.1"}, "effort.openrouter": {""},
 		"effort.anthropic": {"high"}, "web_fetch.cli": {"1"},
-		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"claude"},
+		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"/bin/sh"},
 		"timezone": {"Asia/Tokyo"}, "fetch_interval": {"30"}, "articles_per_feed": {"10"},
 		"max_failures": {"5"}, "failure_retry_hours": {"24"}, "retention_days": {"30"},
 	}
@@ -194,6 +194,9 @@ func TestSaveGlobalSettings(t *testing.T) {
 		s.APIKeys["openrouter"] != "sk-or-test-1234567890" || s.Effort("openrouter") != "" ||
 		s.Effort("anthropic") != "high" || !s.UseWebFetch("cli") || s.UseWebFetch("anthropic") {
 		t.Errorf("保存内容が違う: %+v", s)
+	}
+	if s.CLIPath != "claude" {
+		t.Errorf("画面から claude コマンドのパスを変えられた: %q", s.CLIPath)
 	}
 	// APIキーは画面に平文で出さない。空欄で再保存してもキーは消えない
 	_, body := get(t, ts, "/settings")
@@ -734,5 +737,51 @@ func TestFeedReview(t *testing.T) {
 	}
 	if strings.Index(review, "止まったフィード") > strings.Index(review, "選ばれないフィード") {
 		t.Error("スキップ中のフィードが先に並んでいない")
+	}
+}
+
+// パスワードなし（画面の保護は前段に任せる）でトークンを設定した場合、APIだけはトークン必須にする。
+func TestAPITokenWithoutPassword(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := app.New(st)
+	a.Conf = conffile.New(st, t.TempDir())
+	if err := a.Conf.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := New(a, "me", "")
+	srv.APIToken = "tok"
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req := func(method, path, auth string) int {
+		r, _ := http.NewRequest(method, ts.URL+path, nil)
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		resp, err := noRedirect().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, c := range []struct {
+		method, path, auth string
+		want               int
+	}{
+		{"GET", "/api/stats", "", http.StatusUnauthorized},
+		{"POST", "/api/eval", "", http.StatusUnauthorized},
+		{"GET", "/api/stats", "Bearer wrong", http.StatusUnauthorized},
+		{"GET", "/api/stats", "Bearer tok", http.StatusOK},
+		{"GET", "/api/status", "", http.StatusOK},
+		{"GET", "/p/main/", "", http.StatusOK},
+	} {
+		if got := req(c.method, c.path, c.auth); got != c.want {
+			t.Errorf("%s %s (%q) = %d, want %d", c.method, c.path, c.auth, got, c.want)
+		}
 	}
 }

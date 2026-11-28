@@ -41,10 +41,11 @@
       <span class="muted small">サーバでログイン済みのClaude Codeを使う</span></label>
     <div class="provider-fields"><div class="provider-inner">
       <div class="grid">
-        <label>claude コマンドのパス<input name="cli_path" value="{{.S.CLIPath}}"></label>
+        <label>claude コマンド<input value="{{.S.CLIPath}}" readonly aria-readonly="true"></label>
         <label>モデル（--model）<input name="cli_model" value="{{.S.CLIModel}}" placeholder="空ならCLIのデフォルト"></label>
       </div>
-      <p class="muted small">mekikiを動かすユーザーで、サーバ上で一度 <code>claude</code> を起動してログインしておいてください。</p>
+      <p class="muted small">mekikiを動かすユーザーで、サーバ上で一度 <code>claude</code> を起動してログインしておいてください。
+      コマンドは PATH から探します。別の場所にあるときは、サーバ上の config.toml の <code>[settings.ai.cli]</code> の <code>path</code> に書いて再起動してください（画面からは変えられません）。</p>
       <label class="check"><input type="checkbox" name="web_fetch.cli" value="1" {{if index .S.WebFetch "cli"}}checked{{end}}>本文を取得できない記事は、AIにWebページを取得させて要約する</label>
     </div></div>
   </div>

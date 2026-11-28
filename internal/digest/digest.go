@@ -563,7 +563,7 @@ func fetchPage(ctx context.Context, link string) string {
 		return ""
 	}
 	req.Header.Set("User-Agent", feeds.UserAgent)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newPageClient().Do(req)
 	if err != nil {
 		slog.Info("ページ取得失敗", "url", link, "err", err)
 		return ""

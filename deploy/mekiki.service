@@ -11,7 +11,7 @@ Group=mekiki
 WorkingDirectory=/var/lib/mekiki
 ExecStart=/usr/local/bin/mekiki serve -addr :8080 -data /var/lib/mekiki
 # 認証情報は `systemctl edit mekiki` で上書きファイルに書くか、EnvironmentFile で渡す
-Environment=MEKIKI_PASSWORD=change-me
+# （例: Environment=MEKIKI_PASSWORD=<長いランダムな値>。設定しなければ認証なし）
 # EnvironmentFile=-/etc/mekiki/env
 Restart=on-failure
 RestartSec=5
