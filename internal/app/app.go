@@ -86,6 +86,42 @@ func (a *App) FetchNow(ctx context.Context, profileID int64) (feeds.Result, erro
 	return a.doFetch(ctx, profileID)
 }
 
+// FetchFeed はプロファイルの1つのフィードを、スキップ中でも今すぐ取得する。取得中なら ErrFetchBusy。
+func (a *App) FetchFeed(ctx context.Context, profileID, feedID int64) (store.Feed, feeds.Result, error) {
+	if !a.fetchMu.TryLock() {
+		return store.Feed{}, feeds.Result{}, ErrFetchBusy
+	}
+	defer a.fetchMu.Unlock()
+	cfg, err := a.Settings(ctx)
+	if err != nil {
+		return store.Feed{}, feeds.Result{}, err
+	}
+	find := func() (store.Feed, error) {
+		list, err := a.Store.Feeds(ctx, profileID)
+		if err != nil {
+			return store.Feed{}, err
+		}
+		for _, f := range list {
+			if f.ID == feedID {
+				return f, nil
+			}
+		}
+		return store.Feed{}, store.ErrNotFound
+	}
+	f, err := find()
+	if err != nil {
+		return f, feeds.Result{}, err
+	}
+	res, err := feeds.FetchFeeds(ctx, a.Store, []store.Feed{f}, feeds.Options{
+		ArticlesPerFeed: cfg.ArticlesPerFeed, MaxFailures: cfg.MaxFailures, FailureRetryHours: cfg.FailureRetryHours,
+	}, time.Now())
+	if err != nil {
+		return f, res, err
+	}
+	f, err = find()
+	return f, res, err
+}
+
 // fetchWait は取得中なら終わるのを待ってから、そのプロファイルのフィードを取得する（要約実行前の取得用）。
 func (a *App) fetchWait(ctx context.Context, profileID int64) error {
 	a.fetchMu.Lock()

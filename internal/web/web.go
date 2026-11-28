@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	p("POST /feeds/import", s.actionImportOPML)
 	p("POST /feeds/{id}/update", s.actionUpdateFeed)
 	p("POST /feeds/{id}/delete", s.actionDeleteFeed)
+	p("POST /feeds/{id}/fetch", s.actionFetchFeed)
 	p("POST /feeds/reset", s.actionResetFailures)
 	return s.auth(sameOrigin(s.saveConfigAfterPost(mux)))
 }
@@ -240,7 +241,8 @@ func changesConfig(p string) bool {
 		return false
 	}
 	_, sub, _ := strings.Cut(rest, "/")
-	return sub == "settings" || sub == "delete" || (strings.HasPrefix(sub, "feeds/") && sub != "feeds/reset")
+	return sub == "settings" || sub == "delete" ||
+		(strings.HasPrefix(sub, "feeds/") && sub != "feeds/reset" && !strings.HasSuffix(sub, "/fetch"))
 }
 
 // sameOrigin は別サイトからのPOST（CSRF）を拒否する。
@@ -827,6 +829,25 @@ func (s *Server) actionDeleteFeed(w http.ResponseWriter, r *http.Request, p conf
 		return
 	}
 	back(w, r, prefix(p)+"/feeds", "msg", "フィードを削除しました")
+}
+
+// actionFetchFeed は1つのフィードを今すぐ取得し、結果をフィード画面に表示する。
+func (s *Server) actionFetchFeed(w http.ResponseWriter, r *http.Request, p config.Profile) {
+	fallback := prefix(p) + "/feeds"
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	f, res, err := s.App.FetchFeed(r.Context(), p.ID, id)
+	switch {
+	case errors.Is(err, app.ErrFetchBusy):
+		back(w, r, fallback, "err", "フィードを取得中です。終わってからもう一度試してください")
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+	case err != nil:
+		serverError(w, err)
+	case res.Failed > 0:
+		back(w, r, fallback, "err", fmt.Sprintf("「%s」の取得に失敗しました: %s", f.Title, f.LastError))
+	default:
+		back(w, r, fallback, "msg", fmt.Sprintf("「%s」を取得しました（新着%d件、保存されている記事%d件）", f.Title, res.Added, f.ArticleCount))
+	}
 }
 
 func (s *Server) actionResetFailures(w http.ResponseWriter, r *http.Request, p config.Profile) {
