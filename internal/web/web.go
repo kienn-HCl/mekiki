@@ -1261,7 +1261,7 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	next.CompatURL = strings.TrimSpace(r.FormValue("compat_url"))
 
-	next.CLIPath = strings.TrimSpace(r.FormValue("cli_path"))
+	next.CLIPath = cur.CLIPath // 任意のコマンドを実行させられるので、画面からは変えさせない（config.toml でだけ変える）
 	next.CLIModel = strings.TrimSpace(r.FormValue("cli_model"))
 	next.Efforts = map[string]string{}
 	for _, p := range config.Providers {
@@ -1277,9 +1277,6 @@ func (s *Server) actionSaveSettings(w http.ResponseWriter, r *http.Request) {
 	next.MaxFailures = n("max_failures", cur.MaxFailures)
 	next.FailureRetryHours = n("failure_retry_hours", cur.FailureRetryHours)
 	next.RetentionDays = n("retention_days", cur.RetentionDays)
-	if next.CLIPath == "" {
-		next.CLIPath = "claude"
-	}
 	if err := next.Validate(); err != nil {
 		back(w, r, "/settings", "err", err.Error())
 		return

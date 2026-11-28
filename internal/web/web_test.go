@@ -181,7 +181,7 @@ func TestSaveGlobalSettings(t *testing.T) {
 	form := url.Values{
 		"backend": {"openrouter"}, "model.openrouter": {"openai/gpt-5.1"}, "effort.openrouter": {""},
 		"effort.anthropic": {"high"}, "web_fetch.cli": {"1"},
-		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"claude"},
+		"api_key.openrouter": {"sk-or-test-1234567890"}, "cli_path": {"/bin/sh"},
 		"timezone": {"Asia/Tokyo"}, "fetch_interval": {"30"}, "articles_per_feed": {"10"},
 		"max_failures": {"5"}, "failure_retry_hours": {"24"}, "retention_days": {"30"},
 	}
@@ -194,6 +194,9 @@ func TestSaveGlobalSettings(t *testing.T) {
 		s.APIKeys["openrouter"] != "sk-or-test-1234567890" || s.Effort("openrouter") != "" ||
 		s.Effort("anthropic") != "high" || !s.UseWebFetch("cli") || s.UseWebFetch("anthropic") {
 		t.Errorf("保存内容が違う: %+v", s)
+	}
+	if s.CLIPath != "claude" {
+		t.Errorf("画面から claude コマンドのパスを変えられた: %q", s.CLIPath)
 	}
 	// APIキーは画面に平文で出さない。空欄で再保存してもキーは消えない
 	_, body := get(t, ts, "/settings")

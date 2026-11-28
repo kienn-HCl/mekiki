@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
@@ -379,6 +380,8 @@ func TestRecordsAndPageCache(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	allowInternalPages = true
+	defer func() { allowInternalPages = false }()
 	r, st, feedID := setup(t, &fakeBackend{pick: 2})
 	ctx := context.Background()
 	// 本文も画像もない記事。要約と画像のためにページを取りに行く
@@ -407,5 +410,25 @@ func TestRecordsAndPageCache(t *testing.T) {
 	items, _ := st.PageItems(ctx, profileID, today())
 	if len(items) != 2 || items[0].Stage != "page" || !strings.HasSuffix(items[0].Image, "/og.png") {
 		t.Errorf("ページ由来の要約・画像: %+v", items)
+	}
+}
+
+func TestPageFetchDeniesInternal(t *testing.T) {
+	hit := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer ts.Close()
+	if html := fetchPage(context.Background(), ts.URL+"/backup/mekiki.db"); html != "" || hit {
+		t.Error("ループバックのアドレスに取りに行った")
+	}
+	for _, s := range []string{"127.0.0.1", "10.1.2.3", "192.168.0.10", "172.16.5.5", "169.254.169.254",
+		"100.64.1.1", "::1", "fe80::1", "fd00::1", "0.0.0.0", "::ffff:127.0.0.1"} {
+		if !isInternal(netip.MustParseAddr(s)) {
+			t.Errorf("%s を内部のアドレスと判定しない", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "203.0.113.5", "2001:4860:4860::8888"} {
+		if isInternal(netip.MustParseAddr(s)) {
+			t.Errorf("%s を内部のアドレスと判定した", s)
+		}
 	}
 }

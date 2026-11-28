@@ -93,7 +93,7 @@ type CompatProvider struct {
 }
 
 type CLIProvider struct {
-	Path     string `toml:"path"`
+	Path     string `toml:"path" comment:"claude コマンド。名前だけなら PATH から探す（画面からは変えられない）"`
 	Model    string `toml:"model"`
 	WebFetch bool   `toml:"web_fetch" comment:"本文が取れない記事でAIにWebページを取得させるか"`
 }
@@ -602,7 +602,7 @@ func (m *Manager) Restore(ctx context.Context, b Bundle) error {
 	if err := m.checkLocked(); err != nil {
 		return err
 	}
-	if err := m.applyLocked(ctx, b, b.hasFeeds()); err != nil {
+	if err := m.applyLocked(ctx, b, b.hasFeeds(), true); err != nil {
 		return err
 	}
 	return m.writeLocked(ctx)
@@ -620,12 +620,14 @@ func (b Bundle) hasFeeds() bool {
 func (m *Manager) apply(ctx context.Context, b Bundle, syncFeeds bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.applyLocked(ctx, b, syncFeeds)
+	return m.applyLocked(ctx, b, syncFeeds, false)
 }
 
 // applyLocked は一式を検証してDBに反映する。検証に失敗したらDBは変えない。
 // syncFeeds なら各プロファイルのフィード一覧をOPMLに合わせる（OPMLがないプロファイルはフィードなし）。
-func (m *Manager) applyLocked(ctx context.Context, b Bundle, syncFeeds bool) error {
+// fromWeb（画面からの復元）では claude コマンドのパスを今の値のまま変えない
+// （任意のコマンドを実行させられるので、サーバ上の設定ファイルでだけ変えられるようにする）。
+func (m *Manager) applyLocked(ctx context.Context, b Bundle, syncFeeds, fromWeb bool) error {
 	f, err := Decode(b[configName])
 	if err != nil {
 		return fmt.Errorf("%s: %w", configName, err)
@@ -633,6 +635,13 @@ func (m *Manager) applyLocked(ctx context.Context, b Bundle, syncFeeds bool) err
 	r, err := f.resolve()
 	if err != nil {
 		return fmt.Errorf("%s: %w", configName, err)
+	}
+	if fromWeb {
+		kv, err := m.Store.Settings(ctx)
+		if err != nil {
+			return err
+		}
+		r.settings.CLIPath = config.Load(kv).CLIPath
 	}
 	feedDefs := make([][]store.FeedDef, len(r.profiles))
 	if syncFeeds {
