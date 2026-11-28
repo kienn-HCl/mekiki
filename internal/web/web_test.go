@@ -736,3 +736,49 @@ func TestFeedReview(t *testing.T) {
 		t.Error("スキップ中のフィードが先に並んでいない")
 	}
 }
+
+// パスワードなし（画面の保護は前段に任せる）でトークンを設定した場合、APIだけはトークン必須にする。
+func TestAPITokenWithoutPassword(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := app.New(st)
+	a.Conf = conffile.New(st, t.TempDir())
+	if err := a.Conf.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := New(a, "me", "")
+	srv.APIToken = "tok"
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req := func(method, path, auth string) int {
+		r, _ := http.NewRequest(method, ts.URL+path, nil)
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		resp, err := noRedirect().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, c := range []struct {
+		method, path, auth string
+		want               int
+	}{
+		{"GET", "/api/stats", "", http.StatusUnauthorized},
+		{"POST", "/api/eval", "", http.StatusUnauthorized},
+		{"GET", "/api/stats", "Bearer wrong", http.StatusUnauthorized},
+		{"GET", "/api/stats", "Bearer tok", http.StatusOK},
+		{"GET", "/api/status", "", http.StatusOK},
+		{"GET", "/p/main/", "", http.StatusOK},
+	} {
+		if got := req(c.method, c.path, c.auth); got != c.want {
+			t.Errorf("%s %s (%q) = %d, want %d", c.method, c.path, c.auth, got, c.want)
+		}
+	}
+}

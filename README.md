@@ -69,7 +69,7 @@ MEKIKI_PASSWORD=好きなパスワード ./mekiki serve -addr :8080 -data ./data
 | `-data` / `MEKIKI_DATA` | データディレクトリ（既定 `./data`）。`mekiki.db` が作られる |
 | `MEKIKI_PASSWORD` | 設定するとBasic認証をかける。**外部に公開するなら必ず設定する** |
 | `MEKIKI_USER` | Basic認証のユーザー名（既定 `mekiki`） |
-| `MEKIKI_API_TOKEN` | 設定すると統計API（`GET /api/stats` など）と再生ツールのAPI（`POST /api/eval`）を `Authorization: Bearer <トークン>` で使える。画面やほかの操作には使えない。eval はAIの費用を使いうるので扱いに注意 |
+| `MEKIKI_API_TOKEN` | 設定すると統計API（`GET /api/stats` など）と再生ツールのAPI（`POST /api/eval`）を `Authorization: Bearer <トークン>` で使える。画面やほかの操作には使えない。eval はAIの費用を使いうるので扱いに注意。設定すると、`MEKIKI_PASSWORD` がなくても `/api/*` はトークン必須になる（Cloudflare Access などで `/api/*` だけ素通しにする構成向け） |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_COMPAT_API_KEY` | 画面でAPIキーを入れない場合に使うキー |
 
 Basic認証は通信を暗号化しないので、インターネット越しに使う場合はHTTPS化したリバースプロキシ
